@@ -36,6 +36,10 @@ private:
     static constexpr const char* settings_file_name = "NemirtingasEpicEmu.json";
 
     std::string config_path;
+    bool _has_explicit_appid = false;
+    bool _has_explicit_gamename = false;
+    bool _has_explicit_productuserid = false;
+    std::string _base_save_root;
 
 public:
     EOS_EpicAccountId userid;
@@ -49,11 +53,17 @@ public:
     bool unlock_dlcs;
     bool enable_overlay;
     bool disable_online_networking;
+    bool enable_lan_broadcast;
+    bool keep_lobby_on_destroy;
+    bool suppress_member_disconnect_notify;
+    uint16_t discovery_port;
+    uint16_t tcp_port;
 
     ~Settings();
 
     void load_settings();
     void save_settings();
+    void apply_runtime_game_info(std::string const& product_id, std::string const& deployment_id, std::string const& product_name);
 };
 
 #endif

@@ -66,12 +66,13 @@ LOCAL_API std::string get_executable_path();
 LOCAL_API std::string get_module_path();
 
 LOCAL_API void* get_module_handle(std::string const& name);
+LOCAL_API bool is_dll_unloading();
 
 struct iface_ip_t
 {
     uint32_t ip;   // Host ordered
     uint32_t mask; // Host ordered
 };
-LOCAL_API std::vector<iface_ip_t> const& get_ifaces_ip();
-LOCAL_API std::vector<PortableAPI::ipv4_addr> const& get_broadcasts();
+LOCAL_API std::vector<iface_ip_t> get_ifaces_ip();
+LOCAL_API std::vector<PortableAPI::ipv4_addr> get_broadcasts();
 

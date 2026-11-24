@@ -569,6 +569,7 @@ EOS_STRUCT(EOS_P2P_AddNotifyIncomingPacketQueueFullOptions001, (
  * Structure containing information about the packet queue's state and the incoming packet that would overflow the queue
  */
 EOS_STRUCT(EOS_P2P_OnIncomingPacketQueueFullInfo, (
+	enum { k_iCallback = k_iP2PCallbackBase + 5 };
 	/** Client-specified data passed into AddNotifyIncomingPacketQueueFull */
 	void* ClientData;
 	/** The maximum size in bytes the incoming packet queue is allowed to use */

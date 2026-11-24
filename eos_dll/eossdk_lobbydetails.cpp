@@ -70,13 +70,16 @@ EOS_EResult EOSSDK_LobbyDetails::CopyInfo(const EOS_LobbyDetails_CopyInfoOptions
 {
     TRACE_FUNC();
 
+    if (OutLobbyDetailsInfo == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
     if (Options == nullptr)
     {
         *OutLobbyDetailsInfo = nullptr;
         return EOS_EResult::EOS_InvalidParameters;
     }
 
-    EOS_LobbyDetails_Info* pLobbyDetailsInfos = new EOS_LobbyDetails_Info;
+    EOS_LobbyDetails_Info* pLobbyDetailsInfos = new EOS_LobbyDetails_Info{};
 
     pLobbyDetailsInfos->ApiVersion = EOS_LOBBYDETAILS_INFO_API_LATEST;
     {
@@ -93,14 +96,16 @@ EOS_EResult EOSSDK_LobbyDetails::CopyInfo(const EOS_LobbyDetails_CopyInfoOptions
     
     pLobbyDetailsInfos->LobbyOwnerUserId = GetProductUserId(_state.infos.owner_id());
     pLobbyDetailsInfos->PermissionLevel = (EOS_ELobbyPermissionLevel)_state.infos.permission_level();
-    pLobbyDetailsInfos->AvailableSlots = _state.infos.max_lobby_member() - _state.infos.members_size();
-    pLobbyDetailsInfos->MaxMembers = _state.infos.max_lobby_member();
+    uint32_t max_m = _state.infos.max_lobby_member();
+    uint32_t cur_m = static_cast<uint32_t>(_state.infos.members_size());
+    pLobbyDetailsInfos->AvailableSlots = (max_m > cur_m) ? (max_m - cur_m) : 0;
+    pLobbyDetailsInfos->MaxMembers = max_m;
     pLobbyDetailsInfos->bAllowInvites = EOS_TRUE;
-    pLobbyDetailsInfos->bAllowHostMigration = EOS_TRUE;
-    pLobbyDetailsInfos->bRTCRoomEnabled = EOS_TRUE;
-    pLobbyDetailsInfos->bAllowJoinById = EOS_TRUE;
-    pLobbyDetailsInfos->bRejoinAfterKickRequiresInvite = EOS_TRUE;
-    pLobbyDetailsInfos->bPresenceEnabled = EOS_TRUE;
+    pLobbyDetailsInfos->bAllowHostMigration = _state.infos.ballowhostmigration() ? EOS_TRUE : EOS_FALSE;
+    pLobbyDetailsInfos->bRTCRoomEnabled = _state.infos.brtcroomenabled() ? EOS_TRUE : EOS_FALSE;
+    pLobbyDetailsInfos->bAllowJoinById = _state.infos.ballowjoinbyid() ? EOS_TRUE : EOS_FALSE;
+    pLobbyDetailsInfos->bRejoinAfterKickRequiresInvite = _state.infos.brejoinafterkickrequiresinvite() ? EOS_TRUE : EOS_FALSE;
+    pLobbyDetailsInfos->bPresenceEnabled = _state.infos.bpresenceenabled() ? EOS_TRUE : EOS_FALSE;
     pLobbyDetailsInfos->AllowedPlatformIds = NULL;
     pLobbyDetailsInfos->AllowedPlatformIdsCount = 0;
 
@@ -153,8 +158,8 @@ EOS_EResult EOSSDK_LobbyDetails::CopyAttributeByIndex(const EOS_LobbyDetails_Cop
     auto attr_it = _state.infos.attributes().begin();
     std::advance(attr_it, Options->AttrIndex);
 
-    EOS_Lobby_Attribute* pAttribute = new EOS_Lobby_Attribute;
-    EOS_Lobby_AttributeData* pData = new EOS_Lobby_AttributeData;
+    EOS_Lobby_Attribute* pAttribute = new EOS_Lobby_Attribute{};
+    EOS_Lobby_AttributeData* pData = new EOS_Lobby_AttributeData{};
     
     {
         size_t len = attr_it->first.length() + 1;
@@ -196,6 +201,7 @@ EOS_EResult EOSSDK_LobbyDetails::CopyAttributeByIndex(const EOS_LobbyDetails_Cop
         }
     }
 
+    pData->ApiVersion = EOS_LOBBY_ATTRIBUTEDATA_API_LATEST;
     pAttribute->ApiVersion = EOS_LOBBYDETAILS_COPYINFO_API_LATEST;
     pAttribute->Data = pData;
     pAttribute->Visibility = (EOS_ELobbyAttributeVisibility)attr_it->second.visibility_type();
@@ -237,8 +243,8 @@ EOS_EResult EOSSDK_LobbyDetails::CopyAttributeByKey(const EOS_LobbyDetails_CopyA
         return EOS_EResult::EOS_InvalidParameters;
     }
 
-    EOS_Lobby_Attribute* pAttribute = new EOS_Lobby_Attribute;
-    EOS_Lobby_AttributeData* pData = new EOS_Lobby_AttributeData;
+    EOS_Lobby_Attribute* pAttribute = new EOS_Lobby_Attribute{};
+    EOS_Lobby_AttributeData* pData = new EOS_Lobby_AttributeData{};
 
     {
         size_t len = attr_it->first.length() + 1;
@@ -280,6 +286,7 @@ EOS_EResult EOSSDK_LobbyDetails::CopyAttributeByKey(const EOS_LobbyDetails_CopyA
         }
     }
 
+    pData->ApiVersion = EOS_LOBBY_ATTRIBUTEDATA_API_LATEST;
     pAttribute->ApiVersion = EOS_LOBBYDETAILS_COPYINFO_API_LATEST;
     pAttribute->Data = pData;
     pAttribute->Visibility = (EOS_ELobbyAttributeVisibility)attr_it->second.visibility_type();
@@ -372,6 +379,9 @@ EOS_EResult EOSSDK_LobbyDetails::CopyMemberAttributeByIndex(const EOS_LobbyDetai
 {
     TRACE_FUNC();
 
+    if (OutAttribute == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
     if (Options == nullptr || Options->TargetUserId == nullptr)
     {
         *OutAttribute = nullptr;
@@ -379,7 +389,7 @@ EOS_EResult EOSSDK_LobbyDetails::CopyMemberAttributeByIndex(const EOS_LobbyDetai
     }
 
     auto members_it = _state.infos.members().find(Options->TargetUserId->to_string());
-    if (members_it == _state.infos.members().end())
+    if (members_it == _state.infos.members().end() || Options->AttrIndex >= static_cast<uint32_t>(members_it->second.attributes_size()))
     {
         *OutAttribute = nullptr;
         return EOS_EResult::EOS_InvalidParameters;
@@ -388,8 +398,8 @@ EOS_EResult EOSSDK_LobbyDetails::CopyMemberAttributeByIndex(const EOS_LobbyDetai
     auto attr_it = members_it->second.attributes().begin();
     std::advance(attr_it, Options->AttrIndex);
 
-    EOS_Lobby_Attribute* pAttribute = new EOS_Lobby_Attribute;
-    EOS_Lobby_AttributeData* pData = new EOS_Lobby_AttributeData;
+    EOS_Lobby_Attribute* pAttribute = new EOS_Lobby_Attribute{};
+    EOS_Lobby_AttributeData* pData = new EOS_Lobby_AttributeData{};
 
     {
         size_t len = attr_it->first.length() + 1;
@@ -431,6 +441,7 @@ EOS_EResult EOSSDK_LobbyDetails::CopyMemberAttributeByIndex(const EOS_LobbyDetai
         }
     }
 
+    pData->ApiVersion = EOS_LOBBY_ATTRIBUTEDATA_API_LATEST;
     pAttribute->ApiVersion = EOS_LOBBYDETAILS_COPYINFO_API_LATEST;
     pAttribute->Data = pData;
     pAttribute->Visibility = (EOS_ELobbyAttributeVisibility)attr_it->second.visibility_type();
@@ -459,6 +470,9 @@ EOS_EResult EOSSDK_LobbyDetails::CopyMemberAttributeByKey(const EOS_LobbyDetails
 {
     TRACE_FUNC();
 
+    if (OutAttribute == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
     if (Options == nullptr || Options->AttrKey == nullptr || Options->TargetUserId == nullptr)
     {
         *OutAttribute = nullptr;
@@ -479,8 +493,8 @@ EOS_EResult EOSSDK_LobbyDetails::CopyMemberAttributeByKey(const EOS_LobbyDetails
         return EOS_EResult::EOS_InvalidParameters;
     }
 
-    EOS_Lobby_Attribute* pAttribute = new EOS_Lobby_Attribute;
-    EOS_Lobby_AttributeData* pData = new EOS_Lobby_AttributeData;
+    EOS_Lobby_Attribute* pAttribute = new EOS_Lobby_Attribute{};
+    EOS_Lobby_AttributeData* pData = new EOS_Lobby_AttributeData{};
 
     {
         size_t len = attr_it->first.length() + 1;
@@ -522,12 +536,38 @@ EOS_EResult EOSSDK_LobbyDetails::CopyMemberAttributeByKey(const EOS_LobbyDetails
         }
     }
 
+    pData->ApiVersion = EOS_LOBBY_ATTRIBUTEDATA_API_LATEST;
     pAttribute->ApiVersion = EOS_LOBBYDETAILS_COPYINFO_API_LATEST;
     pAttribute->Data = pData;
     pAttribute->Visibility = (EOS_ELobbyAttributeVisibility)attr_it->second.visibility_type();
 
     *OutAttribute = pAttribute;
 
+    return EOS_EResult::EOS_Success;
+}
+
+EOS_EResult EOSSDK_LobbyDetails::CopyMemberInfo(const EOS_LobbyDetails_CopyMemberInfoOptions* Options, EOS_LobbyDetails_MemberInfo** OutLobbyDetailsMemberInfo)
+{
+    TRACE_FUNC();
+
+    if (OutLobbyDetailsMemberInfo == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
+    *OutLobbyDetailsMemberInfo = nullptr;
+
+    if (Options == nullptr || Options->TargetUserId == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
+    if (_state.infos.members().find(Options->TargetUserId->to_string()) == _state.infos.members().end())
+        return EOS_EResult::EOS_NotFound;
+
+    EOS_LobbyDetails_MemberInfo* pInfo = new EOS_LobbyDetails_MemberInfo{};
+    pInfo->ApiVersion = EOS_LOBBYDETAILS_MEMBERINFO_API_LATEST;
+    pInfo->UserId = Options->TargetUserId;
+    pInfo->Platform = EOS_OPT_Epic;
+    pInfo->bAllowsCrossplay = EOS_TRUE;
+
+    *OutLobbyDetailsMemberInfo = pInfo;
     return EOS_EResult::EOS_Success;
 }
 

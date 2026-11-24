@@ -318,6 +318,17 @@ bool EOSSDK_LobbySearch::send_lobbies_search(Lobbies_Search_pb* search)
     if (_search_infos.target_id().empty())
     {
         _search_peers = std::move(GetNetwork().TCPSendToAllPeers(msg));
+        if (_search_peers.empty())
+        {
+            APP_LOG(Log::LogLevel::WARN, "[SEARCH] client has NO CONNECTED PEER - search reached nobody (peer link missing)");
+        }
+        else
+        {
+            APP_LOG(Log::LogLevel::DEBUG, "[SEARCH] client sent search id=%llu params=%d to %zu peer(s)",
+                static_cast<unsigned long long>(_search_infos.search_id()),
+                _search_infos.parameters_size(),
+                _search_peers.size());
+        }
     }
     else
     {
@@ -339,22 +350,34 @@ bool EOSSDK_LobbySearch::send_lobbies_search(Lobbies_Search_pb* search)
 bool EOSSDK_LobbySearch::on_lobbies_search_response(Network_Message_pb const& msg, Lobbies_Search_response_pb const& resp)
 {
     TRACE_FUNC();
-    std::lock_guard<std::mutex> lk(_local_mutex);
-
-    if (_search_cb.get() != nullptr && resp.search_id() == _search_infos.search_id())
+    std::vector<Lobby_Infos_pb> cached_lobbies;
     {
-        _search_peers.erase(msg.source_id());
-        if (_results.size() < _max_results)
+        std::lock_guard<std::mutex> lk(_local_mutex);
+
+        APP_LOG(Log::LogLevel::INFO, "[SEARCH] Received lobbies_search_response search_id=%llu from peer='%s' (%d lobbies)",
+            static_cast<unsigned long long>(resp.search_id()), msg.source_id().c_str(), resp.lobbies_size());
+
+        if (_search_cb.get() != nullptr && resp.search_id() == _search_infos.search_id())
         {
-            for (auto const& lobby : resp.lobbies())
+            _search_peers.erase(msg.source_id());
+            if (_results.size() < _max_results)
             {
-                if (_results.size() < _max_results)
-                    _results.emplace_back(lobby);
-                else
-                    break;
+                for (auto const& lobby : resp.lobbies())
+                {
+                    if (_results.size() < _max_results)
+                    {
+                        _results.emplace_back(lobby);
+                        cached_lobbies.emplace_back(lobby);
+                    }
+                    else
+                        break;
+                }
             }
         }
     }
+
+    for (auto const& lobby : cached_lobbies)
+        GetEOS_Lobby().cache_search_result(lobby);
 
     return true;
 }
@@ -394,10 +417,22 @@ bool EOSSDK_LobbySearch::RunCallbacks(pFrameResult_t res)
                 (std::chrono::steady_clock::now() - _search_cb->created_time) > search_timeout)
             {// All peers answered or Search timeout
                 if (_results.empty())
-                    fci.ResultCode = EOS_EResult::EOS_NotFound;
+                {
+                    if (!_search_infos.lobby_id().empty() || !_search_infos.target_id().empty())
+                        fci.ResultCode = EOS_EResult::EOS_NotFound;
+                    else
+                        fci.ResultCode = EOS_EResult::EOS_Success;
+                }
                 else
                     fci.ResultCode = EOS_EResult::EOS_Success;
-    
+
+                APP_LOG(Log::LogLevel::INFO, "[SEARCH] Find finished search_id=%llu result=%s (%d) (%zu lobbies, remaining_peers=%zu)",
+                    static_cast<unsigned long long>(_search_infos.search_id()),
+                    (fci.ResultCode == EOS_EResult::EOS_Success ? "EOS_Success" : "EOS_NotFound"),
+                    static_cast<int>(fci.ResultCode),
+                    _results.size(),
+                    _search_peers.size());
+
                 _search_cb.reset();
                 res->done = true;
             }

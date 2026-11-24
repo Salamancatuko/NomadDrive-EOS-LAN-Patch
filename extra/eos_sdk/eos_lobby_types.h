@@ -12,6 +12,7 @@ enum { k_iLobbyCallbackBase = 7000 };
 #define EOS_Lobby_CreateLobbyOptions                        EOS_Lobby_CreateLobbyOptions009
 #define EOS_Lobby_DestroyLobbyOptions                       EOS_Lobby_DestroyLobbyOptions001
 #define EOS_Lobby_JoinLobbyOptions                          EOS_Lobby_JoinLobbyOptions003
+#define EOS_Lobby_JoinLobbyByIdOptions                      EOS_Lobby_JoinLobbyByIdOptions002
 #define EOS_Lobby_LeaveLobbyOptions                         EOS_Lobby_LeaveLobbyOptions001
 #define EOS_Lobby_UpdateLobbyModificationOptions            EOS_Lobby_UpdateLobbyModificationOptions001
 #define EOS_Lobby_UpdateLobbyOptions                        EOS_Lobby_UpdateLobbyOptions001
@@ -63,6 +64,10 @@ enum { k_iLobbyCallbackBase = 7000 };
 #define EOS_Lobby_AddNotifyLobbyInviteAcceptedOptions       EOS_Lobby_AddNotifyLobbyInviteAcceptedOptions001
 #define EOS_Lobby_AddNotifyJoinLobbyAcceptedOptions         EOS_Lobby_AddNotifyJoinLobbyAcceptedOptions001
 #define EOS_Lobby_CopyLobbyDetailsHandleByUiEventIdOptions  EOS_Lobby_CopyLobbyDetailsHandleByUiEventIdOptions001
+#define EOS_Lobby_GetConnectStringOptions                   EOS_Lobby_GetConnectStringOptions001
+#define EOS_Lobby_ParseConnectStringOptions                 EOS_Lobby_ParseConnectStringOptions001
+#define EOS_LobbyDetails_CopyMemberInfoOptions              EOS_LobbyDetails_CopyMemberInfoOptions001
+#define EOS_LobbyDetails_MemberInfo                         EOS_LobbyDetails_MemberInfo001
 
 #define EOS_LOBBY_CREATELOBBY_API_008 8
 
@@ -79,6 +84,7 @@ enum { k_iLobbyCallbackBase = 7000 };
 #define EOS_LOBBY_CREATELOBBY_API_LATEST                        EOS_LOBBY_CREATELOBBY_API_009
 #define EOS_LOBBY_DESTROYLOBBY_API_LATEST                       EOS_LOBBY_DESTROYLOBBY_API_001
 #define EOS_LOBBY_JOINLOBBY_API_LATEST                          EOS_LOBBY_JOINLOBBY_API_003
+#define EOS_LOBBY_JOINLOBBYBYID_API_LATEST                      EOS_LOBBY_JOINLOBBYBYID_API_002
 #define EOS_LOBBY_LEAVELOBBY_API_LATEST                         EOS_LOBBY_LEAVELOBBY_API_001
 #define EOS_LOBBY_UPDATELOBBYMODIFICATION_API_LATEST            EOS_LOBBY_UPDATELOBBYMODIFICATION_API_001
 #define EOS_LOBBY_UPDATELOBBY_API_LATEST                        EOS_LOBBY_UPDATELOBBY_API_001
@@ -130,3 +136,7 @@ enum { k_iLobbyCallbackBase = 7000 };
 #define EOS_LOBBY_ADDNOTIFYLOBBYINVITEACCEPTED_API_LATEST       EOS_LOBBY_ADDNOTIFYLOBBYINVITEACCEPTED_API_001
 #define EOS_LOBBY_ADDNOTIFYJOINLOBBYACCEPTED_API_LATEST         EOS_LOBBY_ADDNOTIFYJOINLOBBYACCEPTED_API_001
 #define EOS_LOBBY_COPYLOBBYDETAILSHANDLEBYUIEVENTID_API_LATEST  EOS_LOBBY_COPYLOBBYDETAILSHANDLEBYUIEVENTID_API_001
+#define EOS_LOBBY_GETCONNECTSTRING_API_LATEST                   EOS_LOBBY_GETCONNECTSTRING_API_001
+#define EOS_LOBBY_PARSECONNECTSTRING_API_LATEST                 EOS_LOBBY_PARSECONNECTSTRING_API_001
+#define EOS_LOBBYDETAILS_COPYMEMBERINFO_API_LATEST              EOS_LOBBYDETAILS_COPYMEMBERINFO_API_001
+#define EOS_LOBBYDETAILS_MEMBERINFO_API_LATEST                  EOS_LOBBYDETAILS_MEMBERINFO_API_001

@@ -19,6 +19,7 @@
 
 #include "eossdk_platform.h"
 #include "settings.h"
+#include "eos_client_api.h"
 
 namespace sdk
 {
@@ -26,6 +27,8 @@ namespace sdk
 EOSSDK_Platform::EOSSDK_Platform():
     _platform_init(false),
     _ticket_budget_in_milliseconds(0),
+    _network_status(EOS_ENetworkStatus::EOS_NS_Online),
+    _application_status(EOS_EApplicationStatus::EOS_AS_Foreground),
 
     _cb_manager       (nullptr),
     _network          (nullptr),
@@ -45,15 +48,11 @@ EOSSDK_Platform::EOSSDK_Platform():
     _stats            (nullptr),
     _leaderboards     (nullptr)
 {
-    _cb_manager        = new Callback_Manager;
-    _network           = new Network;
 }
 
 EOSSDK_Platform::~EOSSDK_Platform()
 {
     Release();
-    delete _network;
-    delete _cb_manager;
 }
 
 EOSSDK_Platform& EOSSDK_Platform::Inst()
@@ -72,11 +71,22 @@ void EOSSDK_Platform::Init(const EOS_Platform_Options* Options)
             _api_version = Options->ApiVersion;
             switch (Options->ApiVersion)
             {
+                default:
+                    if (Options->ApiVersion > EOS_PLATFORM_OPTIONS_API_014)
+                    {
+                        APP_LOG(Log::LogLevel::WARN, "Unknown EOS_Platform_Create ApiVersion %d, ignoring the rest of the options struct", Options->ApiVersion);
+                    }
+                    else
+                    {
+                        APP_LOG(Log::LogLevel::ERR, "Unsupported EOS_Platform_Create ApiVersion %d", Options->ApiVersion);
+                        return;
+                    }
                 case EOS_PLATFORM_OPTIONS_API_014: 
                 {
                     auto pf = reinterpret_cast<const EOS_Platform_Options014*>(Options);
-                    APP_LOG(Log::LogLevel::DEBUG, "IntegratedPlatformOptionsContainerHandle = '%s'", pf->IntegratedPlatformOptionsContainerHandle);
-                    APP_LOG(Log::LogLevel::DEBUG, "OverrideLocaleCode = '%d'", *pf->TaskNetworkTimeoutSeconds);
+                    APP_LOG(Log::LogLevel::DEBUG, "IntegratedPlatformOptionsContainerHandle = '%p'", pf->IntegratedPlatformOptionsContainerHandle);
+                    if (pf->TaskNetworkTimeoutSeconds != nullptr)
+                        APP_LOG(Log::LogLevel::DEBUG, "TaskNetworkTimeoutSeconds = '%f'", *pf->TaskNetworkTimeoutSeconds);
                     APP_LOG(Log::LogLevel::DEBUG, "DeploymentId = '%s'", _deployment_id.c_str());
                 }
                 case EOS_PLATFORM_OPTIONS_API_013:
@@ -84,7 +94,7 @@ void EOSSDK_Platform::Init(const EOS_Platform_Options* Options)
                 case EOS_PLATFORM_OPTIONS_API_011:
                 {
                     auto pf = reinterpret_cast<const EOS_Platform_Options011*>(Options);
-                    if (pf->RTCOptions != NULL) APP_LOG(Log::LogLevel::DEBUG, "RTCOptions = '%s'", pf->RTCOptions->ApiVersion);
+                    if (pf->RTCOptions != NULL) APP_LOG(Log::LogLevel::DEBUG, "RTCOptions->ApiVersion = %d", pf->RTCOptions->ApiVersion);
                 }
                 case EOS_PLATFORM_OPTIONS_API_010:
                 case EOS_PLATFORM_OPTIONS_API_009:
@@ -92,8 +102,7 @@ void EOSSDK_Platform::Init(const EOS_Platform_Options* Options)
                 case EOS_PLATFORM_OPTIONS_API_007:
                 {
                     auto pf = reinterpret_cast<const EOS_Platform_Options007*>(Options);
-                    if (pf->CacheDirectory != nullptr)
-                        _ticket_budget_in_milliseconds = pf->TickBudgetInMilliseconds;
+                    _ticket_budget_in_milliseconds = pf->TickBudgetInMilliseconds;
 
                     APP_LOG(Log::LogLevel::DEBUG, "TickBudgetInMilliseconds = '%d'", _ticket_budget_in_milliseconds);
                 }                
@@ -128,6 +137,9 @@ void EOSSDK_Platform::Init(const EOS_Platform_Options* Options)
                     APP_LOG(Log::LogLevel::DEBUG, "DeploymentId = '%s'", _deployment_id.c_str());
                     APP_LOG(Log::LogLevel::DEBUG, "Flags = %llu", _flags);
                 }
+                case 4:
+                case 3:
+                case 2:
                 case EOS_PLATFORM_OPTIONS_API_001:
                 {
                     auto pf = reinterpret_cast<const EOS_Platform_Options001*>(Options);
@@ -154,12 +166,15 @@ void EOSSDK_Platform::Init(const EOS_Platform_Options* Options)
                     APP_LOG(Log::LogLevel::DEBUG, "ApiVersion = %u", pf->ApiVersion);
                 }
                 break;
-
-                default:
-                    APP_LOG(Log::LogLevel::FATAL, "Unmanaged API version %d", Options->ApiVersion);
-                    abort();
             }
         }
+
+        Settings::Inst().apply_runtime_game_info(_product_id, _deployment_id, EOSSDK_Client::Inst()._product_name);
+
+        if (_cb_manager == nullptr)
+            _cb_manager = new Callback_Manager;
+        if (_network == nullptr)
+            _network = new Network;
 
         _auth              = new EOSSDK_Auth;
         _friends           = new EOSSDK_Friends;
@@ -187,29 +202,42 @@ void EOSSDK_Platform::Init(const EOS_Platform_Options* Options)
 
 void EOSSDK_Platform::Release()
 {
-    GLOBAL_LOCK();
+    Network* net_to_delete = nullptr;
+    Callback_Manager* cb_to_delete = nullptr;
 
-    if (_platform_init)
     {
-        delete _leaderboards;
-        delete _titlestorage;
-        delete _stats;
-        delete _achievements;
-        delete _playerdatastorage;
-        delete _p2p;
-        delete _userinfo;
-        delete _lobby;
-        delete _sessions;
-        delete _presence;
-        delete _friends;
-        delete _ui;
-        delete _ecom;
-        delete _connect;
-        delete _auth;
-        delete _metrics;
+        GLOBAL_LOCK();
 
-        _platform_init = false;
+        if (_platform_init)
+        {
+            delete _leaderboards;      _leaderboards = nullptr;
+            delete _titlestorage;      _titlestorage = nullptr;
+            delete _stats;             _stats = nullptr;
+            delete _achievements;      _achievements = nullptr;
+            delete _playerdatastorage; _playerdatastorage = nullptr;
+            delete _p2p;               _p2p = nullptr;
+            delete _userinfo;          _userinfo = nullptr;
+            delete _lobby;             _lobby = nullptr;
+            delete _sessions;          _sessions = nullptr;
+            delete _presence;          _presence = nullptr;
+            delete _friends;           _friends = nullptr;
+            delete _ui;                _ui = nullptr;
+            delete _ecom;              _ecom = nullptr;
+            delete _connect;           _connect = nullptr;
+            delete _auth;              _auth = nullptr;
+            delete _metrics;           _metrics = nullptr;
+
+            _platform_init = false;
+        }
+
+        net_to_delete = _network;
+        _network = nullptr;
+        cb_to_delete = _cb_manager;
+        _cb_manager = nullptr;
     }
+
+    delete net_to_delete;
+    delete cb_to_delete;
 }
 
 /**
@@ -219,6 +247,9 @@ void EOSSDK_Platform::Release()
 void EOSSDK_Platform::Tick()
 {
     GLOBAL_LOCK();
+    if (!_platform_init || _cb_manager == nullptr)
+        return;
+
     GetCB_Manager().set_max_tick_budget(_ticket_budget_in_milliseconds);
     GetCB_Manager().tick();
 }
@@ -636,6 +667,35 @@ EOS_EResult EOSSDK_Platform::CheckForLauncherAndRestart()
     TRACE_FUNC();
 
     return EOS_EResult::EOS_NoChange;
+}
+
+EOS_ENetworkStatus EOSSDK_Platform::GetNetworkStatus()
+{
+    GLOBAL_LOCK();
+    return _network_status;
+}
+
+EOS_EResult EOSSDK_Platform::SetNetworkStatus(EOS_ENetworkStatus NewStatus)
+{
+    GLOBAL_LOCK();
+    _network_status = NewStatus;
+    return EOS_EResult::EOS_Success;
+}
+
+EOS_EApplicationStatus EOSSDK_Platform::GetApplicationStatus()
+{
+    GLOBAL_LOCK();
+    return _application_status;
+}
+
+EOS_EResult EOSSDK_Platform::SetApplicationStatus(EOS_EApplicationStatus NewStatus)
+{
+    GLOBAL_LOCK();
+    if (NewStatus == EOS_EApplicationStatus::EOS_AS_BackgroundUnconstrained)
+        _application_status = EOS_EApplicationStatus::EOS_AS_Foreground;
+    else
+        _application_status = NewStatus;
+    return EOS_EResult::EOS_Success;
 }
 
 }

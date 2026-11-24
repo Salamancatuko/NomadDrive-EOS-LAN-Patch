@@ -32,16 +32,25 @@ EOSSDK_P2P::EOSSDK_P2P():
     next_requested_channel(-1),
     _relay_control(EOS_ERelayControl::EOS_RC_AllowRelays),
     _p2p_port(7777),
-    _max_additional_ports_to_try(99)
+    _max_additional_ports_to_try(99),
+    _incoming_packet_queue_max_size_bytes(64ULL * 1024ULL * 1024ULL),
+    _outgoing_packet_queue_max_size_bytes(64ULL * 1024ULL * 1024ULL),
+    _has_cached_established(false),
+    _cached_established_remote_id(nullptr),
+    _cached_established_type(EOS_EConnectionEstablishedType::EOS_CET_NewConnection)
 {
     GetCB_Manager().register_frame(this);
     GetCB_Manager().register_callbacks(this);
 
     GetNetwork().register_listener(this, 0, Network_Message_pb::MessagesCase::kP2P);
+    GetNetwork().set_immediate_p2p_handler([this](Network_Message_pb const& msg) -> bool {
+        return this->try_immediate_p2p_data(msg);
+    });
 }
 
 EOSSDK_P2P::~EOSSDK_P2P()
 {
+    GetNetwork().set_immediate_p2p_handler(nullptr);
     GetNetwork().unregister_listener(this, 0, Network_Message_pb::MessagesCase::kP2P);
 
     GetCB_Manager().unregister_callbacks(this);
@@ -50,47 +59,108 @@ EOSSDK_P2P::~EOSSDK_P2P()
     GetCB_Manager().remove_all_notifications(this);
 }
 
+bool EOSSDK_P2P::try_immediate_p2p_data(Network_Message_pb const& msg)
+{
+    if (msg.messages_case() != Network_Message_pb::MessagesCase::kP2P ||
+        msg.p2p().message_case() != P2P_Message_pb::MessageCase::kDataMessage)
+    {
+        return false;
+    }
 
-EOS_P2P_OnPeerConnectionEstablishedInfo* mCachedOpcei = NULL;
+    std::lock_guard<std::recursive_mutex> lk(local_mutex);
+
+    EOS_ProductUserId remote_id = GetProductUserId(msg.source_id());
+    auto it = _p2p_connections.find(remote_id);
+    if (it == _p2p_connections.end() || it->second.status != p2p_state_t::status_e::connected)
+    {
+        return false;
+    }
+
+    auto const& data = msg.p2p().data_message();
+    if (!data.socket_name().empty() && !it->second.socket_name.empty() && it->second.socket_name != data.socket_name())
+    {
+        return false;
+    }
+
+    _p2p_in_messages[data.channel()].emplace_back(data);
+
+    P2P_Data_Acknowledge_pb* ack = new P2P_Data_Acknowledge_pb;
+    ack->set_channel(data.channel());
+    ack->set_accepted(true);
+    send_p2p_data_ack(msg.source_id(), ack);
+    return true;
+}
+
+static EOS_P2P_SocketId* make_socket_id(std::string const& socket_name)
+{
+    EOS_P2P_SocketId* socketId = new EOS_P2P_SocketId{};
+    socketId->ApiVersion = EOS_P2P_SOCKETID_API_LATEST;
+    if (!socket_name.empty())
+    {
+        strncpy(const_cast<char*>(socketId->SocketName), socket_name.c_str(), sizeof(EOS_P2P_SocketId::SocketName) - 1);
+        const_cast<char*>(socketId->SocketName)[sizeof(EOS_P2P_SocketId::SocketName) - 1] = '\0';
+    }
+    return socketId;
+}
+
+static void set_socket_name(const EOS_P2P_SocketId* socketId, std::string const& socket_name)
+{
+    if (socketId == nullptr)
+        return;
+
+    EOS_P2P_SocketId* mutable_id = const_cast<EOS_P2P_SocketId*>(socketId);
+    mutable_id->ApiVersion = EOS_P2P_SOCKETID_API_LATEST;
+    memset(mutable_id->SocketName, 0, sizeof(EOS_P2P_SocketId::SocketName));
+    if (!socket_name.empty())
+    {
+        strncpy(mutable_id->SocketName, socket_name.c_str(), sizeof(EOS_P2P_SocketId::SocketName) - 1);
+    }
+}
 
 void EOSSDK_P2P::set_p2p_state_connected(EOS_ProductUserId remote_id, p2p_state_t& state)
 {
-    p2p_state_t::status_e oldStatus = state.status;
-    state.status = p2p_state_t::status_e::connected;
-    for (auto& out_msgs : state.p2p_out_messages)
-    {// Send all previously stored messages
+    if (remote_id == nullptr)
+        remote_id = GetInvalidProductUserId();
+
+    p2p_state_t::status_e oldStatus;
+    std::string sock_name;
+    std::list<P2P_Data_Message_pb> queued_out;
+    {
+        std::lock_guard<std::recursive_mutex> lk(local_mutex);
+        oldStatus = state.status;
+        state.status = p2p_state_t::status_e::connected;
+        sock_name = state.socket_name;
+        queued_out.swap(state.p2p_out_messages);
+    }
+
+    for (auto& out_msgs : queued_out)
+    {// Send all previously stored messages outside local_mutex
         send_p2p_data(remote_id->to_string(), &out_msgs);
     }
-    state.p2p_out_messages.clear();
 
+    EOS_EConnectionEstablishedType conn_type = (oldStatus == p2p_state_t::status_e::connection_loss)
+        ? EOS_EConnectionEstablishedType::EOS_CET_Reconnection
+        : EOS_EConnectionEstablishedType::EOS_CET_NewConnection;
 
     std::vector<pFrameResult_t> notifs = std::move(GetCB_Manager().get_notifications(this, EOS_P2P_OnPeerConnectionEstablishedInfo::k_iCallback));
-    if (notifs.empty()) {
-        pFrameResult_t res(new FrameResult);
-        mCachedOpcei = &res->CreateCallback<EOS_P2P_OnPeerConnectionEstablishedInfo>((CallbackFunc)NULL);
-        if (oldStatus == p2p_state_t::status_e::connection_loss) {
-            mCachedOpcei->ConnectionType = EOS_EConnectionEstablishedType::EOS_CET_Reconnection;
-        }
-        else mCachedOpcei->ConnectionType = EOS_EConnectionEstablishedType::EOS_CET_NewConnection;
-        mCachedOpcei->RemoteUserId = remote_id;
-        EOS_P2P_SocketId* socketId = new EOS_P2P_SocketId;
-        socketId->ApiVersion = EOS_P2P_SOCKETID_API_LATEST;
-        strncpy(const_cast<char*>(socketId->SocketName), state.socket_name.c_str(), sizeof(EOS_P2P_SocketId::SocketName));
-        mCachedOpcei->SocketId = socketId;
+    if (notifs.empty())
+    {
+        _has_cached_established = true;
+        _cached_established_remote_id = remote_id;
+        _cached_established_type = conn_type;
+        _cached_established_socket_name = sock_name;
+        return;
     }
+
+    _has_cached_established = false;
     for (auto& notif : notifs)
     {
         EOS_P2P_OnPeerConnectionEstablishedInfo& opcei = notif->GetCallback<EOS_P2P_OnPeerConnectionEstablishedInfo>();
-        if (oldStatus == p2p_state_t::status_e::connection_loss) {
-            opcei.ConnectionType = EOS_EConnectionEstablishedType::EOS_CET_Reconnection;
-        }
-        else opcei.ConnectionType = EOS_EConnectionEstablishedType::EOS_CET_NewConnection;
+        opcei.ConnectionType = conn_type;
+        opcei.NetworkType = EOS_ENetworkConnectionType::EOS_NCT_DirectConnection;
         opcei.RemoteUserId = remote_id;
-        EOS_P2P_SocketId * socketId = new EOS_P2P_SocketId;
-        socketId->ApiVersion = EOS_P2P_SOCKETID_API_LATEST;
-        strncpy(const_cast<char*>(socketId->SocketName), state.socket_name.c_str(), sizeof(EOS_P2P_SocketId::SocketName));
-        opcei.SocketId = socketId;
-        mCachedOpcei = &opcei;
+        delete opcei.SocketId;
+        opcei.SocketId = make_socket_id(sock_name);
         notif->GetFunc()(notif->GetFuncParam());
     }
 }
@@ -116,14 +186,29 @@ EOS_EResult EOSSDK_P2P::SendPacket(const EOS_P2P_SendPacketOptions* Options)
     //TRACE_FUNC();
     GLOBAL_LOCK();
     
-    if (Options == nullptr || Options->RemoteUserId == nullptr || Options->Data == nullptr)
+    if (Options == nullptr || Options->RemoteUserId == nullptr || Options->SocketId == nullptr || Options->LocalUserId == nullptr || Options->Data == nullptr)
         return EOS_EResult::EOS_InvalidParameters;
 
-    p2p_state_t& p2p_state = _p2p_connections[Options->RemoteUserId];
     P2P_Data_Message_pb data;
 
     switch (Options->ApiVersion)
     {
+        default:
+            if (Options->ApiVersion > EOS_P2P_SENDPACKET_API_003)
+            {
+                static bool warned_unknown_api = false;
+                if (!warned_unknown_api)
+                {
+                    warned_unknown_api = true;
+                    APP_LOG(Log::LogLevel::WARN, "Unknown EOS_P2P_SendPacket ApiVersion %d, parsing as API_003", Options->ApiVersion);
+                }
+            }
+            else
+            {
+                APP_LOG(Log::LogLevel::ERR, "Unsupported EOS_P2P_SendPacket ApiVersion %d", Options->ApiVersion);
+                return EOS_EResult::EOS_IncompatibleVersion;
+            }
+
         case EOS_P2P_SENDPACKET_API_003:
         {
             const EOS_P2P_SendPacketOptions003* opts = reinterpret_cast<const EOS_P2P_SendPacketOptions003*>(Options);
@@ -142,46 +227,72 @@ EOS_EResult EOSSDK_P2P::SendPacket(const EOS_P2P_SendPacketOptions* Options)
         }
     }
 
-    switch(p2p_state.status)
+    bool do_implicit_accept = false;
+    bool do_send_data = false;
+    bool do_send_conn_req = false;
+    std::string req_socket_name;
+    p2p_state_t* p2p_state_ptr = nullptr;
     {
-        case p2p_state_t::status_e::requesting:
-        {
-            APP_LOG(Log::LogLevel::INFO, "Implicit P2P acceptation on send");
-            // If we have been requested to connect, then its an implicit acceptation
-            set_p2p_state_connected(Options->RemoteUserId, p2p_state);
-        }
+        std::lock_guard<std::recursive_mutex> lk(local_mutex);
+        p2p_state_t& p2p_state = _p2p_connections[Options->RemoteUserId];
+        p2p_state_ptr = &p2p_state;
 
-        case p2p_state_t::status_e::connected:
-        {// We're connected, send the message now
-            send_p2p_data(Options->RemoteUserId->to_string(), &data);
-            if (mCachedOpcei != NULL) {
-                set_p2p_state_connected(Options->RemoteUserId, p2p_state);
-                mCachedOpcei = NULL;
+        switch (p2p_state.status)
+        {
+            case p2p_state_t::status_e::requesting:
+            {
+                APP_LOG(Log::LogLevel::INFO, "Implicit P2P acceptation on send");
+                if (p2p_state.socket_name.empty() && Options->SocketId->SocketName[0] != '\0')
+                    p2p_state.socket_name = Options->SocketId->SocketName;
+                do_implicit_accept = true;
+                do_send_data = true;
             }
+            break;
+
+            case p2p_state_t::status_e::connected:
+            {
+                if (p2p_state.socket_name.empty() && Options->SocketId->SocketName[0] != '\0')
+                    p2p_state.socket_name = Options->SocketId->SocketName;
+                do_send_data = true;
+            }
+            break;
+
+            case p2p_state_t::status_e::connection_loss:
+            case p2p_state_t::status_e::connecting:
+            {
+                // Save the message for later
+                p2p_state.p2p_out_messages.emplace_back(std::move(data));
+            }
+            break;
+
+            case p2p_state_t::status_e::closed:
+            {
+                // Discard any leftover messages from an old connection
+                p2p_state.p2p_out_messages.clear();
+                p2p_state.p2p_out_messages.emplace_back(std::move(data));
+
+                p2p_state.status = p2p_state_t::status_e::connecting;
+                p2p_state.socket_name = Options->SocketId->SocketName;
+                p2p_state.connection_loss_start = std::chrono::steady_clock::now();
+
+                req_socket_name = p2p_state.socket_name;
+                do_send_conn_req = true;
+            }
+            break;
         }
-        break;
+    }
 
-        case p2p_state_t::status_e::connection_loss:
-        case p2p_state_t::status_e::connecting:
-        {
-            // Save the message for later
-            p2p_state.p2p_out_messages.emplace_back(std::move(data));
-        }
-        break;
+    if (do_implicit_accept)
+        set_p2p_state_connected(Options->RemoteUserId, *p2p_state_ptr);
 
-        case p2p_state_t::status_e::closed:
-        {
-            // Save the message for later
-            p2p_state.p2p_out_messages.emplace_back(std::move(data));
+    if (do_send_data)
+        send_p2p_data(Options->RemoteUserId->to_string(), &data);
 
-            p2p_state.status = p2p_state_t::status_e::connecting;
-            p2p_state.socket_name = Options->SocketId->SocketName;
-            p2p_state.connection_loss_start = std::chrono::steady_clock::now();
-
-            P2P_Connect_Request_pb* req = new P2P_Connect_Request_pb;
-            req->set_socket_name(p2p_state.socket_name);
-            send_p2p_connection_request(Options->RemoteUserId->to_string(), req);
-        }
+    if (do_send_conn_req)
+    {
+        P2P_Connect_Request_pb* req = new P2P_Connect_Request_pb;
+        req->set_socket_name(req_socket_name);
+        send_p2p_connection_request(Options->RemoteUserId->to_string(), req);
     }
 
     return EOS_EResult::EOS_Success;
@@ -216,6 +327,7 @@ EOS_EResult EOSSDK_P2P::GetNextReceivedPacketSize(const EOS_P2P_GetNextReceivedP
                 *OutPacketSizeBytes = static_cast<uint32_t>(front.data().length());
                 next_requested_channel = front.channel();
                 has_packet = true;
+                break;
             }
         }
     }
@@ -292,8 +404,7 @@ EOS_EResult EOSSDK_P2P::ReceivePacket(const EOS_P2P_ReceivePacketOptions* Option
 
     *OutPeerId = GetProductUserId(msg.user_id());
     *OutBytesWritten = static_cast<uint32_t>(msg.data().copy(reinterpret_cast<char*>(OutData), Options->MaxDataSizeBytes));
-    msg.socket_name().copy(OutSocketId->SocketName, sizeof(EOS_P2P_SocketId::SocketName));
-    OutSocketId->SocketName[32] = 0;
+    set_socket_name(OutSocketId, msg.socket_name());
     *OutChannel = msg.channel();
     next_requested_channel = -1;
 
@@ -325,7 +436,7 @@ EOS_NotificationId EOSSDK_P2P::AddNotifyPeerConnectionRequest(const EOS_P2P_AddN
     oicri.ClientData = ClientData;
     oicri.LocalUserId = Settings::Inst().productuserid;
     oicri.RemoteUserId = GetProductUserId(sdk::NULL_USER_ID);
-    oicri.SocketId = new EOS_P2P_SocketId;
+    oicri.SocketId = make_socket_id(Options && Options->SocketId ? Options->SocketId->SocketName : "");
 
     return GetCB_Manager().add_notification(this, res);
 }
@@ -370,14 +481,16 @@ EOS_NotificationId EOSSDK_P2P::AddNotifyPeerConnectionEstablished(const EOS_P2P_
     opcei.ClientData = ClientData;
     opcei.LocalUserId = Settings::Inst().productuserid;
     opcei.RemoteUserId = GetProductUserId(sdk::NULL_USER_ID);
-    opcei.SocketId = new EOS_P2P_SocketId;
+    opcei.SocketId = make_socket_id(Options && Options->SocketId ? Options->SocketId->SocketName : "");
     opcei.ConnectionType = EOS_EConnectionEstablishedType::EOS_CET_Reconnection;
     opcei.NetworkType = EOS_ENetworkConnectionType::EOS_NCT_DirectConnection;
 
-    if (mCachedOpcei != NULL) {
-        opcei.RemoteUserId = mCachedOpcei->RemoteUserId;
-        opcei.SocketId = mCachedOpcei->SocketId;
-        opcei.ConnectionType = mCachedOpcei->ConnectionType;
+    if (_has_cached_established) {
+        opcei.RemoteUserId = _cached_established_remote_id ? _cached_established_remote_id : GetProductUserId(sdk::NULL_USER_ID);
+        delete opcei.SocketId;
+        opcei.SocketId = make_socket_id(_cached_established_socket_name);
+        opcei.ConnectionType = _cached_established_type;
+        _has_cached_established = false;
         res->GetFunc()(res->GetFuncParam());
     }
 
@@ -426,7 +539,7 @@ EOS_NotificationId EOSSDK_P2P::AddNotifyPeerConnectionInterrupted(const EOS_P2P_
     opcii.ClientData = ClientData;
     opcii.LocalUserId = Settings::Inst().productuserid;
     opcii.RemoteUserId = GetProductUserId(sdk::NULL_USER_ID);
-    opcii.SocketId = new EOS_P2P_SocketId;
+    opcii.SocketId = make_socket_id(Options && Options->SocketId ? Options->SocketId->SocketName : "");
 
     return GetCB_Manager().add_notification(this, res);
 }
@@ -467,7 +580,7 @@ EOS_NotificationId EOSSDK_P2P::AddNotifyPeerConnectionClosed(const EOS_P2P_AddNo
     orcci.ClientData = ClientData;
     orcci.LocalUserId = Settings::Inst().productuserid;
     orcci.RemoteUserId = GetProductUserId(sdk::NULL_USER_ID);
-    orcci.SocketId = new EOS_P2P_SocketId;
+    orcci.SocketId = make_socket_id(Options && Options->SocketId ? Options->SocketId->SocketName : "");
     orcci.Reason = EOS_EConnectionClosedReason::EOS_CCR_Unknown;
 
     return GetCB_Manager().add_notification(this, res);
@@ -500,18 +613,39 @@ EOS_EResult EOSSDK_P2P::AcceptConnection(const EOS_P2P_AcceptConnectionOptions* 
 
     if (Options == nullptr || Options->RemoteUserId == nullptr || Options->SocketId == nullptr)
         return EOS_EResult::EOS_InvalidParameters;
-    
-    auto& conn = _p2p_connections[Options->RemoteUserId];
 
-    if (conn.status == p2p_state_t::status_e::requesting)
+    bool send_accept_resp = false;
+    p2p_state_t* conn_ptr = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> lk(local_mutex);
+        auto& conn = _p2p_connections[Options->RemoteUserId];
+        conn_ptr = &conn;
+
+        std::string req_sock = Options->SocketId->SocketName;
+        if (!req_sock.empty() && conn.socket_name != req_sock)
+        {
+            conn.p2p_out_messages.clear();
+            conn.socket_name = req_sock;
+        }
+
+        if (conn.status == p2p_state_t::status_e::requesting)
+        {
+            send_accept_resp = true;
+        }
+    }
+
+    if (send_accept_resp)
     {
         P2P_Connect_Response_pb* resp = new P2P_Connect_Response_pb;
         resp->set_accepted(true);
         send_p2p_connection_response(Options->RemoteUserId->to_string(), resp);
     }
-    
-    set_p2p_state_connected(Options->RemoteUserId, conn);
-    conn.connection_loss_start = {};
+
+    set_p2p_state_connected(Options->RemoteUserId, *conn_ptr);
+    {
+        std::lock_guard<std::recursive_mutex> lk(local_mutex);
+        conn_ptr->connection_loss_start = {};
+    }
     return EOS_EResult::EOS_Success;
 }
 
@@ -533,46 +667,67 @@ EOS_EResult EOSSDK_P2P::CloseConnection(const EOS_P2P_CloseConnectionOptions* Op
 
     if (Options->SocketId == nullptr)
     {
-        auto& conn = _p2p_connections[Options->RemoteUserId];
-        conn.p2p_out_messages.clear();
-        for (auto& in_msgs : _p2p_in_messages)
+        bool should_send_close = false;
+        std::string remote_str = Options->RemoteUserId->to_string();
         {
-            in_msgs.second.erase(std::remove_if(in_msgs.second.begin(), in_msgs.second.end(), [&Options](P2P_Data_Message_pb& msg)
+            std::lock_guard<std::recursive_mutex> lk(local_mutex);
+            auto& conn = _p2p_connections[Options->RemoteUserId];
+            conn.p2p_out_messages.clear();
+            for (auto& in_msgs : _p2p_in_messages)
             {
-                return msg.user_id() == Options->RemoteUserId->to_string();
-            }), in_msgs.second.end());
+                in_msgs.second.erase(std::remove_if(in_msgs.second.begin(), in_msgs.second.end(), [&remote_str](P2P_Data_Message_pb const& msg)
+                {
+                    return msg.user_id() == remote_str;
+                }), in_msgs.second.end());
+            }
+
+            if (conn.status != p2p_state_t::status_e::closed)
+            {
+                conn.status = p2p_state_t::status_e::closed;
+                should_send_close = true;
+            }
         }
-
-        if (conn.status != p2p_state_t::status_e::closed)
+        if (should_send_close)
         {
-            conn.status = p2p_state_t::status_e::closed;
-
             P2P_Connection_Close_pb* close = new P2P_Connection_Close_pb;
-            send_p2p_connetion_close(Options->RemoteUserId->to_string(), close);
+            send_p2p_connetion_close(remote_str, close);
         }
     }
     else
     {
         std::string target_sock_name = Options->SocketId->SocketName;
-        auto& conn = _p2p_connections[Options->RemoteUserId];
-        conn.p2p_out_messages.clear();
-        for (auto& in_msgs : _p2p_in_messages)
+        std::string remote_str = Options->RemoteUserId->to_string();
+        bool should_send_close = false;
         {
-            in_msgs.second.erase(std::remove_if(in_msgs.second.begin(), in_msgs.second.end(), [&Options](P2P_Data_Message_pb& msg)
+            std::lock_guard<std::recursive_mutex> lk(local_mutex);
+            for (auto& in_msgs : _p2p_in_messages)
             {
-                return msg.user_id() == Options->RemoteUserId->to_string();
-            }), in_msgs.second.end());
-        }
-
-        if (conn.status != p2p_state_t::status_e::closed)
-        {
-            if (conn.socket_name == target_sock_name)
-            {
-                conn.status = p2p_state_t::status_e::closed;
-
-                P2P_Connection_Close_pb* close = new P2P_Connection_Close_pb;
-                send_p2p_connetion_close(Options->RemoteUserId->to_string(), close);
+                in_msgs.second.erase(std::remove_if(in_msgs.second.begin(), in_msgs.second.end(), [&remote_str, &target_sock_name](P2P_Data_Message_pb const& msg)
+                {
+                    return msg.user_id() == remote_str && msg.socket_name() == target_sock_name;
+                }), in_msgs.second.end());
             }
+
+            auto& conn = _p2p_connections[Options->RemoteUserId];
+            if (conn.socket_name == target_sock_name || conn.socket_name.empty())
+            {
+                conn.p2p_out_messages.clear();
+                if (conn.status != p2p_state_t::status_e::closed)
+                {
+                    conn.status = p2p_state_t::status_e::closed;
+                    should_send_close = true;
+                }
+            }
+            else
+            {
+                APP_LOG(Log::LogLevel::INFO, "[P2P] Ignoring CloseConnection for stale socket '%s' (active socket '%s')",
+                    target_sock_name.c_str(), conn.socket_name.c_str());
+            }
+        }
+        if (should_send_close)
+        {
+            P2P_Connection_Close_pb* close = new P2P_Connection_Close_pb;
+            send_p2p_connetion_close(remote_str, close);
         }
     }
     
@@ -595,15 +750,34 @@ EOS_EResult EOSSDK_P2P::CloseConnections(const EOS_P2P_CloseConnectionsOptions* 
         return EOS_EResult::EOS_InvalidParameters;
 
     std::string target_sock_name = Options->SocketId->SocketName;
-    for (auto& conn : _p2p_connections)
+    std::vector<std::string> peers_to_close;
     {
-        if (conn.second.socket_name == target_sock_name)
+        std::lock_guard<std::recursive_mutex> lk(local_mutex);
+        for (auto& in_msgs : _p2p_in_messages)
         {
-            conn.second.status = p2p_state_t::status_e::closed;
-
-            P2P_Connection_Close_pb* close = new P2P_Connection_Close_pb;
-            send_p2p_connetion_close(conn.first->to_string(), close);
+            in_msgs.second.erase(std::remove_if(in_msgs.second.begin(), in_msgs.second.end(), [&target_sock_name](P2P_Data_Message_pb const& msg)
+            {
+                return msg.socket_name() == target_sock_name;
+            }), in_msgs.second.end());
         }
+
+        for (auto& conn : _p2p_connections)
+        {
+            if (conn.second.socket_name == target_sock_name)
+            {
+                conn.second.p2p_out_messages.clear();
+                if (conn.second.status != p2p_state_t::status_e::closed)
+                {
+                    conn.second.status = p2p_state_t::status_e::closed;
+                    peers_to_close.emplace_back(conn.first->to_string());
+                }
+            }
+        }
+    }
+    for (auto const& peer_str : peers_to_close)
+    {
+        P2P_Connection_Close_pb* close = new P2P_Connection_Close_pb;
+        send_p2p_connetion_close(peer_str, close);
     }
     
     return EOS_EResult::EOS_Success;
@@ -744,6 +918,132 @@ EOS_EResult EOSSDK_P2P::GetPortRange(const EOS_P2P_GetPortRangeOptions* Options,
     return EOS_EResult::EOS_Success;
 }
 
+EOS_EResult EOSSDK_P2P::GetPacketQueueInfo(const EOS_P2P_GetPacketQueueInfoOptions* Options, EOS_P2P_PacketQueueInfo* OutPacketQueueInfo)
+{
+    TRACE_FUNC();
+    GLOBAL_LOCK();
+
+    if (Options == nullptr || OutPacketQueueInfo == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
+    std::lock_guard<std::recursive_mutex> lk(local_mutex);
+
+    uint64_t in_bytes = 0;
+    uint64_t in_count = 0;
+    for (auto const& ch_msgs : _p2p_in_messages)
+    {
+        in_count += ch_msgs.second.size();
+        for (auto const& msg : ch_msgs.second)
+            in_bytes += msg.data().size();
+    }
+
+    uint64_t out_bytes = 0;
+    uint64_t out_count = 0;
+    for (auto const& conn : _p2p_connections)
+    {
+        out_count += conn.second.p2p_out_messages.size();
+        for (auto const& msg : conn.second.p2p_out_messages)
+            out_bytes += msg.data().size();
+    }
+
+    OutPacketQueueInfo->IncomingPacketQueueMaxSizeBytes = _incoming_packet_queue_max_size_bytes;
+    OutPacketQueueInfo->IncomingPacketQueueCurrentSizeBytes = in_bytes;
+    OutPacketQueueInfo->IncomingPacketQueueCurrentPacketCount = in_count;
+    OutPacketQueueInfo->OutgoingPacketQueueMaxSizeBytes = _outgoing_packet_queue_max_size_bytes;
+    OutPacketQueueInfo->OutgoingPacketQueueCurrentSizeBytes = out_bytes;
+    OutPacketQueueInfo->OutgoingPacketQueueCurrentPacketCount = out_count;
+
+    return EOS_EResult::EOS_Success;
+}
+
+EOS_EResult EOSSDK_P2P::SetPacketQueueSize(const EOS_P2P_SetPacketQueueSizeOptions* Options)
+{
+    TRACE_FUNC();
+    GLOBAL_LOCK();
+
+    if (Options == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
+    std::lock_guard<std::recursive_mutex> lk(local_mutex);
+    _incoming_packet_queue_max_size_bytes = Options->IncomingPacketQueueMaxSizeBytes;
+    _outgoing_packet_queue_max_size_bytes = Options->OutgoingPacketQueueMaxSizeBytes;
+    return EOS_EResult::EOS_Success;
+}
+
+EOS_EResult EOSSDK_P2P::ClearPacketQueue(const EOS_P2P_ClearPacketQueueOptions* Options)
+{
+    TRACE_FUNC();
+    GLOBAL_LOCK();
+
+    if (Options == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
+    std::string remote_str = (Options->RemoteUserId != nullptr) ? Options->RemoteUserId->to_string() : std::string();
+    std::string sock_str = (Options->SocketId != nullptr) ? std::string(Options->SocketId->SocketName) : std::string();
+
+    std::lock_guard<std::recursive_mutex> lk(local_mutex);
+    for (auto& in_msgs : _p2p_in_messages)
+    {
+        in_msgs.second.erase(std::remove_if(in_msgs.second.begin(), in_msgs.second.end(),
+            [&](P2P_Data_Message_pb const& msg)
+            {
+                if (!remote_str.empty() && msg.user_id() != remote_str)
+                    return false;
+                if (!sock_str.empty() && msg.socket_name() != sock_str)
+                    return false;
+                return true;
+            }), in_msgs.second.end());
+    }
+
+    for (auto& conn : _p2p_connections)
+    {
+        if (!remote_str.empty() && conn.first->to_string() != remote_str)
+            continue;
+
+        if (sock_str.empty())
+        {
+            conn.second.p2p_out_messages.clear();
+        }
+        else
+        {
+            conn.second.p2p_out_messages.remove_if([&](P2P_Data_Message_pb const& msg)
+            {
+                return msg.socket_name() == sock_str;
+            });
+        }
+    }
+
+    return EOS_EResult::EOS_Success;
+}
+
+EOS_NotificationId EOSSDK_P2P::AddNotifyIncomingPacketQueueFull(const EOS_P2P_AddNotifyIncomingPacketQueueFullOptions* Options, void* ClientData, const EOS_P2P_OnIncomingPacketQueueFullCallback IncomingPacketQueueFullHandler)
+{
+    TRACE_FUNC();
+    GLOBAL_LOCK();
+
+    if (Options == nullptr || IncomingPacketQueueFullHandler == nullptr)
+        return EOS_INVALID_NOTIFICATIONID;
+
+    pFrameResult_t res(new FrameResult);
+    EOS_P2P_OnIncomingPacketQueueFullInfo& info = res->CreateCallback<EOS_P2P_OnIncomingPacketQueueFullInfo>((CallbackFunc)IncomingPacketQueueFullHandler);
+    info.ClientData = ClientData;
+    info.PacketQueueMaxSizeBytes = _incoming_packet_queue_max_size_bytes;
+    info.PacketQueueCurrentSizeBytes = 0;
+    info.OverflowPacketLocalUserId = Settings::Inst().productuserid;
+    info.OverflowPacketChannel = 0;
+    info.OverflowPacketSizeBytes = 0;
+
+    return GetCB_Manager().add_notification(this, res);
+}
+
+void EOSSDK_P2P::RemoveNotifyIncomingPacketQueueFull(EOS_NotificationId NotificationId)
+{
+    TRACE_FUNC();
+    GLOBAL_LOCK();
+
+    GetCB_Manager().remove_notification(this, NotificationId);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //                           Network Send messages                           //
 ///////////////////////////////////////////////////////////////////////////////
@@ -854,17 +1154,21 @@ bool EOSSDK_P2P::on_peer_connect(Network_Message_pb const& msg, Network_Peer_Con
     GLOBAL_LOCK();
 
     auto peer_id = GetProductUserId(msg.source_id());
-    auto it = _p2p_connections.find(peer_id);
-    if (it != _p2p_connections.end() && it->second.status == p2p_state_t::status_e::connection_loss)
+    std::list<P2P_Data_Message_pb> queued_out;
     {
-        it->second.status = p2p_state_t::status_e::connected;
-
-        // Now that the client is back, send all queued messages
-        for (auto& msg : it->second.p2p_out_messages)
+        std::lock_guard<std::recursive_mutex> lk(local_mutex);
+        auto it = _p2p_connections.find(peer_id);
+        if (it != _p2p_connections.end() && it->second.status == p2p_state_t::status_e::connection_loss)
         {
-            send_p2p_data(it->first->to_string(), &msg);
+            it->second.status = p2p_state_t::status_e::connected;
+            queued_out.swap(it->second.p2p_out_messages);
         }
-        it->second.p2p_out_messages.clear();
+    }
+
+    // Now that the client is back, send all queued messages outside local_mutex
+    for (auto& out_msg : queued_out)
+    {
+        send_p2p_data(peer_id->to_string(), &out_msg);
     }
 
     return true;
@@ -876,9 +1180,15 @@ bool EOSSDK_P2P::on_peer_disconnect(Network_Message_pb const& msg, Network_Peer_
     GLOBAL_LOCK();
 
     auto peer_id = GetProductUserId(msg.source_id());
-    auto it = _p2p_connections.find(peer_id);
-    if (it != _p2p_connections.end())
+    std::string sock_name;
     {
+        std::lock_guard<std::recursive_mutex> lk(local_mutex);
+        auto it = _p2p_connections.find(peer_id);
+        if (it == _p2p_connections.end() || it->second.status == p2p_state_t::status_e::closed)
+            return true;
+
+        sock_name = it->second.socket_name;
+        it->second.status = p2p_state_t::status_e::connection_loss;
         it->second.connection_loss_start = std::chrono::steady_clock::now();
     }
 
@@ -888,6 +1198,7 @@ bool EOSSDK_P2P::on_peer_disconnect(Network_Message_pb const& msg, Network_Peer_
         EOS_P2P_OnPeerConnectionInterruptedInfo& opcii = notif->GetCallback<EOS_P2P_OnPeerConnectionInterruptedInfo>();
         opcii.LocalUserId = Settings::Inst().productuserid;
         opcii.RemoteUserId = peer_id;
+        set_socket_name(opcii.SocketId, sock_name);
         notif->GetFunc()(notif->GetFuncParam());
     }
 
@@ -900,18 +1211,67 @@ bool EOSSDK_P2P::on_p2p_connection_request(Network_Message_pb const& msg, P2P_Co
     GLOBAL_LOCK();
 
     auto peer_id = GetProductUserId(msg.source_id());
-    auto& conn = _p2p_connections[peer_id];
-    if (conn.status != p2p_state_t::status_e::connected)
+    bool handle_new_request = false;
+    bool notify_old_closed = false;
+    std::string old_sock_name;
+
     {
-        conn.status = p2p_state_t::status_e::requesting;
-        conn.connection_loss_start = std::chrono::steady_clock::now();
-        conn.socket_name = req.socket_name();
+        std::lock_guard<std::recursive_mutex> lk(local_mutex);
+        auto& conn = _p2p_connections[peer_id];
+        bool is_new_socket = (!req.socket_name().empty() && !conn.socket_name.empty() && conn.socket_name != req.socket_name());
+
+        if (conn.status != p2p_state_t::status_e::connected || is_new_socket)
+        {
+            if (is_new_socket)
+            {
+                old_sock_name = conn.socket_name;
+                if (conn.status == p2p_state_t::status_e::connected)
+                    notify_old_closed = true;
+
+                std::string const& remote_str = msg.source_id();
+                for (auto& in_msgs : _p2p_in_messages)
+                {
+                    in_msgs.second.erase(std::remove_if(in_msgs.second.begin(), in_msgs.second.end(), [&remote_str, &old_sock_name](P2P_Data_Message_pb const& m)
+                    {
+                        return m.user_id() == remote_str && m.socket_name() == old_sock_name;
+                    }), in_msgs.second.end());
+                }
+            }
+
+            conn.p2p_out_messages.clear();
+            conn.status = p2p_state_t::status_e::requesting;
+            conn.connection_loss_start = std::chrono::steady_clock::now();
+            conn.socket_name = req.socket_name();
+            handle_new_request = true;
+        }
+    }
+
+    if (notify_old_closed)
+    {
+        APP_LOG(Log::LogLevel::INFO, "[P2P] Peer '%s' opened new socket '%s'; closing previous socket '%s'",
+            msg.source_id().c_str(), req.socket_name().c_str(), old_sock_name.c_str());
+        std::vector<pFrameResult_t> closed_notifs = std::move(GetCB_Manager().get_notifications(this, EOS_P2P_OnRemoteConnectionClosedInfo::k_iCallback));
+        for (auto& notif : closed_notifs)
+        {
+            EOS_P2P_OnRemoteConnectionClosedInfo& orcci = notif->GetCallback<EOS_P2P_OnRemoteConnectionClosedInfo>();
+            orcci.LocalUserId = Settings::Inst().productuserid;
+            orcci.RemoteUserId = peer_id;
+            orcci.Reason = EOS_EConnectionClosedReason::EOS_CCR_ClosedByPeer;
+            set_socket_name(orcci.SocketId, old_sock_name);
+
+            notif->GetFunc()(notif->GetFuncParam());
+        }
+    }
+
+    if (handle_new_request)
+    {
         std::vector<pFrameResult_t> notifs = std::move(GetCB_Manager().get_notifications(this, EOS_P2P_OnIncomingConnectionRequestInfo::k_iCallback));
         for (auto& notif : notifs)
         {
             EOS_P2P_OnIncomingConnectionRequestInfo& oicrc = notif->GetCallback<EOS_P2P_OnIncomingConnectionRequestInfo>();
+            oicrc.LocalUserId = Settings::Inst().productuserid;
             oicrc.RemoteUserId = peer_id;
-            strncpy(const_cast<char*>(oicrc.SocketId->SocketName), req.socket_name().c_str(), sizeof(EOS_P2P_SocketId::SocketName));
+            set_socket_name(oicrc.SocketId, req.socket_name());
 
             notif->GetFunc()(notif->GetFuncParam());
         }
@@ -934,16 +1294,31 @@ bool EOSSDK_P2P::on_p2p_connection_response(Network_Message_pb const& msg, P2P_C
     EOS_ProductUserId remote_id = GetProductUserId(msg.source_id());
     if (resp.accepted())
     {
-        set_p2p_state_connected(remote_id, _p2p_connections[remote_id]);
+        p2p_state_t* state_ptr = nullptr;
+        {
+            std::lock_guard<std::recursive_mutex> lk(local_mutex);
+            state_ptr = &_p2p_connections[remote_id];
+        }
+        set_p2p_state_connected(remote_id, *state_ptr);
     }
     else
     {
+        std::string sock_name;
+        {
+            std::lock_guard<std::recursive_mutex> lk(local_mutex);
+            auto& conn = _p2p_connections[remote_id];
+            sock_name = conn.socket_name;
+            conn.status = p2p_state_t::status_e::closed;
+            conn.p2p_out_messages.clear();
+        }
         std::vector<pFrameResult_t> notifs = std::move(GetCB_Manager().get_notifications(this, EOS_P2P_OnRemoteConnectionClosedInfo::k_iCallback));
         for (auto& notif : notifs)
         {
             EOS_P2P_OnRemoteConnectionClosedInfo& orcci = notif->GetCallback<EOS_P2P_OnRemoteConnectionClosedInfo>();
+            orcci.LocalUserId = Settings::Inst().productuserid;
             orcci.Reason = EOS_EConnectionClosedReason::EOS_CCR_ClosedByPeer;
             orcci.RemoteUserId = remote_id;
+            set_socket_name(orcci.SocketId, sock_name);
 
             notif->GetFunc()(notif->GetFuncParam());
         }
@@ -955,31 +1330,67 @@ bool EOSSDK_P2P::on_p2p_connection_response(Network_Message_pb const& msg, P2P_C
 bool EOSSDK_P2P::on_p2p_data(Network_Message_pb const& msg, P2P_Data_Message_pb const& data)
 {
     //TRACE_FUNC();
-    std::lock_guard<std::recursive_mutex> lk(local_mutex);
+    GLOBAL_LOCK();
 
     EOS_ProductUserId remote_id = GetProductUserId(msg.source_id());
-    auto& p2p_state = _p2p_connections[remote_id];
+    p2p_state_t* p2p_state_ptr = nullptr;
+    bool implicit_accept = false;
+    bool accept_data = false;
+
+    {
+        std::lock_guard<std::recursive_mutex> lk(local_mutex);
+        p2p_state_t& p2p_state = _p2p_connections[remote_id];
+        p2p_state_ptr = &p2p_state;
+
+        switch (p2p_state.status)
+        {
+            case p2p_state_t::status_e::connecting:
+            case p2p_state_t::status_e::connection_loss:
+            {
+                APP_LOG(Log::LogLevel::INFO, "Implicit P2P acceptation on receive");
+                if (!data.socket_name().empty() && p2p_state.socket_name != data.socket_name())
+                {
+                    p2p_state.p2p_out_messages.clear();
+                    p2p_state.socket_name = data.socket_name();
+                }
+                implicit_accept = true;
+                accept_data = true;
+            }
+            break;
+
+            case p2p_state_t::status_e::connected:
+            {
+                if (!data.socket_name().empty() && p2p_state.socket_name != data.socket_name())
+                {
+                    p2p_state.p2p_out_messages.clear();
+                    p2p_state.socket_name = data.socket_name();
+                }
+                accept_data = true;
+            }
+            break;
+
+            default:
+                accept_data = false;
+                break;
+        }
+    }
+
+    if (implicit_accept)
+        set_p2p_state_connected(remote_id, *p2p_state_ptr);
 
     P2P_Data_Acknowledge_pb* ack = new P2P_Data_Acknowledge_pb;
-
-    switch (p2p_state.status)
+    if (accept_data)
     {
-        case p2p_state_t::status_e::connecting:
         {
-            APP_LOG(Log::LogLevel::INFO, "Implicit P2P acceptation on receive");
-            set_p2p_state_connected(remote_id, p2p_state);
-        }
-
-        case p2p_state_t::status_e::connected:
-        {
-            ack->set_channel(data.channel());
-            ack->set_accepted(true);
+            std::lock_guard<std::recursive_mutex> lk(local_mutex);
             _p2p_in_messages[data.channel()].emplace_back(data);
         }
-        break;
-
-        default:
-            ack->set_accepted(false);
+        ack->set_channel(data.channel());
+        ack->set_accepted(true);
+    }
+    else
+    {
+        ack->set_accepted(false);
     }
 
     return send_p2p_data_ack(msg.source_id(), ack);
@@ -998,17 +1409,27 @@ bool EOSSDK_P2P::on_p2p_connection_close(Network_Message_pb const& msg, P2P_Conn
     TRACE_FUNC();
     GLOBAL_LOCK();
 
+    EOS_ProductUserId remote_id = GetProductUserId(msg.source_id());
+    std::string sock_name;
+    {
+        std::lock_guard<std::recursive_mutex> lk(local_mutex);
+        auto& conn = _p2p_connections[remote_id];
+        sock_name = conn.socket_name;
+        conn.status = p2p_state_t::status_e::closed;
+        conn.p2p_out_messages.clear();
+    }
+
     std::vector<pFrameResult_t> notifs = std::move(GetCB_Manager().get_notifications(this, EOS_P2P_OnRemoteConnectionClosedInfo::k_iCallback));
     for (auto& notif : notifs)
     {
         EOS_P2P_OnRemoteConnectionClosedInfo& orcci = notif->GetCallback<EOS_P2P_OnRemoteConnectionClosedInfo>();
+        orcci.LocalUserId = Settings::Inst().productuserid;
         orcci.Reason = EOS_EConnectionClosedReason::EOS_CCR_ClosedByPeer;
-        orcci.RemoteUserId = GetProductUserId(msg.source_id());
+        orcci.RemoteUserId = remote_id;
+        set_socket_name(orcci.SocketId, sock_name);
 
         notif->GetFunc()(notif->GetFuncParam());
     }
-
-    _p2p_connections[GetProductUserId(msg.source_id())].status = p2p_state_t::status_e::closed;
 
     return true;
 }
@@ -1020,62 +1441,69 @@ bool EOSSDK_P2P::CBRunFrame()
 {
     GLOBAL_LOCK();
 
-    for (auto it = _p2p_connections.begin(); it != _p2p_connections.end(); ++it)
+    struct timeout_close_t
     {
-        switch(it->second.status)
+        EOS_ProductUserId peer_id;
+        std::string socket_name;
+        EOS_EConnectionClosedReason reason;
+    };
+    std::vector<timeout_close_t> timed_out;
+
+    {
+        std::lock_guard<std::recursive_mutex> lk(local_mutex);
+        auto now = std::chrono::steady_clock::now();
+
+        for (auto it = _p2p_connections.begin(); it != _p2p_connections.end(); ++it)
         {
-            case p2p_state_t::status_e::requesting:
+            switch (it->second.status)
             {
-                auto now = std::chrono::steady_clock::now();
-                if ((now - it->second.connection_loss_start) > connecting_timeout)
-                {// We didn't accept the connection
-                    it->second.status = p2p_state_t::status_e::closed;
-                    it->second.p2p_out_messages.clear();
-                }
-            }
-            break;
-
-            case p2p_state_t::status_e::connecting:
-            {
-                auto now = std::chrono::steady_clock::now();
-                if ((now - it->second.connection_loss_start) > connecting_timeout)
+                case p2p_state_t::status_e::requesting:
                 {
-                    it->second.status = p2p_state_t::status_e::closed;
-                    it->second.p2p_out_messages.clear();
-
-                    std::vector<pFrameResult_t> notifs(std::move(GetCB_Manager().get_notifications(this, EOS_P2P_OnRemoteConnectionClosedInfo::k_iCallback)));
-                    for (auto& notif : notifs)
-                    {
-                        EOS_P2P_OnRemoteConnectionClosedInfo& orcci = notif->GetCallback<EOS_P2P_OnRemoteConnectionClosedInfo>();
-                        orcci.RemoteUserId = it->first;
-                        strncpy(const_cast<char*>(orcci.SocketId->SocketName), it->second.socket_name.c_str(), sizeof(orcci.SocketId->SocketName));
-                        const_cast<char*>(orcci.SocketId->SocketName)[sizeof(orcci.SocketId->SocketName) - 1] = '\0';
-                        orcci.Reason = EOS_EConnectionClosedReason::EOS_CCR_ConnectionFailed;
+                    if ((now - it->second.connection_loss_start) > connecting_timeout)
+                    {// We didn't accept the connection
+                        it->second.status = p2p_state_t::status_e::closed;
+                        it->second.p2p_out_messages.clear();
                     }
                 }
-            }
-            break;
+                break;
 
-            case p2p_state_t::status_e::connection_loss:
-            {
-                auto now = std::chrono::steady_clock::now();
-                if ((now - it->second.connection_loss_start) > connection_timeout)
+                case p2p_state_t::status_e::connecting:
                 {
-                    it->second.status = p2p_state_t::status_e::closed;
-                    it->second.p2p_out_messages.clear();
-
-                    std::vector<pFrameResult_t> notifs(std::move(GetCB_Manager().get_notifications(this, EOS_P2P_OnRemoteConnectionClosedInfo::k_iCallback)));
-                    for (auto& notif : notifs)
+                    if ((now - it->second.connection_loss_start) > connecting_timeout)
                     {
-                        EOS_P2P_OnRemoteConnectionClosedInfo& orcci = notif->GetCallback<EOS_P2P_OnRemoteConnectionClosedInfo>();
-                        orcci.RemoteUserId = it->first;
-                        strncpy(const_cast<char*>(orcci.SocketId->SocketName), it->second.socket_name.c_str(), sizeof(orcci.SocketId->SocketName));
-                        const_cast<char*>(orcci.SocketId->SocketName)[sizeof(orcci.SocketId->SocketName) - 1] = '\0';
-                        orcci.Reason = EOS_EConnectionClosedReason::EOS_CCR_TimedOut;
+                        it->second.status = p2p_state_t::status_e::closed;
+                        it->second.p2p_out_messages.clear();
+                        timed_out.push_back({it->first, it->second.socket_name, EOS_EConnectionClosedReason::EOS_CCR_ConnectionFailed});
                     }
                 }
+                break;
+
+                case p2p_state_t::status_e::connection_loss:
+                {
+                    if ((now - it->second.connection_loss_start) > connection_timeout)
+                    {
+                        it->second.status = p2p_state_t::status_e::closed;
+                        it->second.p2p_out_messages.clear();
+                        timed_out.push_back({it->first, it->second.socket_name, EOS_EConnectionClosedReason::EOS_CCR_TimedOut});
+                    }
+                }
+                break;
             }
-            break;
+        }
+    }
+
+    for (auto const& item : timed_out)
+    {
+        std::vector<pFrameResult_t> notifs(std::move(GetCB_Manager().get_notifications(this, EOS_P2P_OnRemoteConnectionClosedInfo::k_iCallback)));
+        for (auto& notif : notifs)
+        {
+            EOS_P2P_OnRemoteConnectionClosedInfo& orcci = notif->GetCallback<EOS_P2P_OnRemoteConnectionClosedInfo>();
+            orcci.LocalUserId = Settings::Inst().productuserid;
+            orcci.RemoteUserId = item.peer_id;
+            set_socket_name(orcci.SocketId, item.socket_name);
+            orcci.Reason = item.reason;
+
+            notif->GetFunc()(notif->GetFuncParam());
         }
     }
 
@@ -1132,6 +1560,18 @@ void EOSSDK_P2P::FreeCallback(pFrameResult_t res)
         case EOS_P2P_OnIncomingConnectionRequestInfo::k_iCallback:
         {
             EOS_P2P_OnIncomingConnectionRequestInfo& callback = res->GetCallback<EOS_P2P_OnIncomingConnectionRequestInfo>();
+            delete callback.SocketId;
+        }
+        break;
+        case EOS_P2P_OnPeerConnectionEstablishedInfo::k_iCallback:
+        {
+            EOS_P2P_OnPeerConnectionEstablishedInfo& callback = res->GetCallback<EOS_P2P_OnPeerConnectionEstablishedInfo>();
+            delete callback.SocketId;
+        }
+        break;
+        case EOS_P2P_OnPeerConnectionInterruptedInfo::k_iCallback:
+        {
+            EOS_P2P_OnPeerConnectionInterruptedInfo& callback = res->GetCallback<EOS_P2P_OnPeerConnectionInterruptedInfo>();
             delete callback.SocketId;
         }
         break;

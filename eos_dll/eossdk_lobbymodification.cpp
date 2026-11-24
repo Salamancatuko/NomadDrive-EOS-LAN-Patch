@@ -52,9 +52,9 @@ EOSSDK_LobbyModification::~EOSSDK_LobbyModification()
 EOS_EResult EOSSDK_LobbyModification::SetBucketId(const EOS_LobbyModification_SetBucketIdOptions* Options) {
     TRACE_FUNC();
     std::lock_guard<std::mutex> lk(_local_mutex);
-    if (Options == nullptr)
+    if (Options == nullptr || Options->BucketId == nullptr)
         return EOS_EResult::EOS_InvalidParameters;
-    _infos.set_bucket_id((Options->BucketId));
+    _infos.set_bucket_id(Options->BucketId);
     _lobby_modified = true;
     return EOS_EResult::EOS_Success;
 }
@@ -109,6 +109,9 @@ EOS_EResult EOSSDK_LobbyModification::SetInvitesAllowed(const EOS_LobbyModificat
 {
     TRACE_FUNC();
     std::lock_guard<std::mutex> lk(_local_mutex);
+
+    if (Options == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
 
     _infos.set_invites_allowed(Options->bInvitesAllowed);
 

@@ -48,6 +48,66 @@ EOS_DECLARE_FUNC(void) EOS_Lobby_JoinLobby(EOS_HLobby Handle, const EOS_Lobby_Jo
     pInst->JoinLobby(Options, ClientData, CompletionDelegate);
 }
 
+EOS_DECLARE_FUNC(void) EOS_Lobby_JoinLobbyById(EOS_HLobby Handle, const EOS_Lobby_JoinLobbyByIdOptions* Options, void* ClientData, const EOS_Lobby_OnJoinLobbyByIdCallback CompletionDelegate)
+{
+    if (Handle == nullptr)
+        return;
+
+    auto pInst = reinterpret_cast<EOSSDK_Lobby*>(Handle);
+    pInst->JoinLobbyById(Options, ClientData, CompletionDelegate);
+}
+
+EOS_DECLARE_FUNC(EOS_EResult) EOS_Lobby_GetRTCRoomName(EOS_HLobby Handle, const EOS_Lobby_GetRTCRoomNameOptions* Options, char* OutBuffer, uint32_t* InOutBufferLength)
+{
+    if (Handle == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
+    auto pInst = reinterpret_cast<EOSSDK_Lobby*>(Handle);
+    return pInst->GetRTCRoomName(Options, OutBuffer, InOutBufferLength);
+}
+
+EOS_DECLARE_FUNC(EOS_EResult) EOS_Lobby_IsRTCRoomConnected(EOS_HLobby Handle, const EOS_Lobby_IsRTCRoomConnectedOptions* Options, EOS_Bool* bOutIsConnected)
+{
+    if (Handle == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
+    auto pInst = reinterpret_cast<EOSSDK_Lobby*>(Handle);
+    return pInst->IsRTCRoomConnected(Options, bOutIsConnected);
+}
+
+EOS_DECLARE_FUNC(EOS_EResult) EOS_Lobby_GetConnectString(EOS_HLobby Handle, const EOS_Lobby_GetConnectStringOptions* Options, char* OutBuffer, uint32_t* InOutBufferLength)
+{
+    if (Handle == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
+    auto pInst = reinterpret_cast<EOSSDK_Lobby*>(Handle);
+    return pInst->GetConnectString(Options, OutBuffer, InOutBufferLength);
+}
+
+EOS_DECLARE_FUNC(EOS_EResult) EOS_Lobby_ParseConnectString(EOS_HLobby Handle, const EOS_Lobby_ParseConnectStringOptions* Options, char* OutBuffer, uint32_t* InOutBufferLength)
+{
+    if (Handle == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
+    auto pInst = reinterpret_cast<EOSSDK_Lobby*>(Handle);
+    return pInst->ParseConnectString(Options, OutBuffer, InOutBufferLength);
+}
+
+EOS_DECLARE_FUNC(EOS_NotificationId) EOS_Lobby_AddNotifyRTCRoomConnectionChanged(EOS_HLobby Handle, const EOS_Lobby_AddNotifyRTCRoomConnectionChangedOptions* Options, void* ClientData, const EOS_Lobby_OnRTCRoomConnectionChangedCallback NotificationFn)
+{
+    static std::atomic<EOS_NotificationId> rtc_notif_id{1};
+    if (Handle == nullptr || Options == nullptr || NotificationFn == nullptr)
+        return EOS_INVALID_NOTIFICATIONID;
+
+    return rtc_notif_id.fetch_add(1, std::memory_order_relaxed);
+}
+
+EOS_DECLARE_FUNC(void) EOS_Lobby_RemoveNotifyRTCRoomConnectionChanged(EOS_HLobby Handle, EOS_NotificationId InId)
+{
+    (void)Handle;
+    (void)InId;
+}
+
 EOS_DECLARE_FUNC(void) EOS_Lobby_LeaveLobby(EOS_HLobby Handle, const EOS_Lobby_LeaveLobbyOptions* Options, void* ClientData, const EOS_Lobby_OnLeaveLobbyCallback CompletionDelegate)
 {
     if (Handle == nullptr)
@@ -445,6 +505,15 @@ EOS_DECLARE_FUNC(EOS_EResult) EOS_LobbyDetails_CopyMemberAttributeByKey(EOS_HLob
     return pInst->CopyMemberAttributeByKey(Options, OutAttribute);
 }
 
+EOS_DECLARE_FUNC(EOS_EResult) EOS_LobbyDetails_CopyMemberInfo(EOS_HLobbyDetails Handle, const EOS_LobbyDetails_CopyMemberInfoOptions* Options, EOS_LobbyDetails_MemberInfo** OutLobbyDetailsMemberInfo)
+{
+    if (Handle == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
+    auto pInst = reinterpret_cast<EOSSDK_LobbyDetails*>(Handle);
+    return pInst->CopyMemberInfo(Options, OutLobbyDetailsMemberInfo);
+}
+
 EOS_DECLARE_FUNC(void) EOS_LobbySearch_Find(EOS_HLobbySearch Handle, const EOS_LobbySearch_FindOptions* Options, void* ClientData, const EOS_LobbySearch_OnFindCallback CompletionDelegate)
 {
     if (Handle == nullptr)
@@ -552,7 +621,14 @@ EOS_DECLARE_FUNC(void) EOS_LobbyDetails_Info_Release(EOS_LobbyDetails_Info* Lobb
         return;
 
     delete[]LobbyDetailsInfo->LobbyId;
+    delete[]LobbyDetailsInfo->BucketId;
     delete LobbyDetailsInfo;
+}
+
+EOS_DECLARE_FUNC(void) EOS_LobbyDetails_MemberInfo_Release(EOS_LobbyDetails_MemberInfo* LobbyDetailsMemberInfo)
+{
+    TRACE_FUNC();
+    delete LobbyDetailsMemberInfo;
 }
 
 EOS_DECLARE_FUNC(void) EOS_Lobby_Attribute_Release(EOS_Lobby_Attribute* LobbyAttribute)

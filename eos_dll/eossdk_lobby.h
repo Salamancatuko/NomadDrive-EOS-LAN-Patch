@@ -130,6 +130,7 @@ namespace sdk
         uint32_t          GetMemberAttributeCount(const EOS_LobbyDetails_GetMemberAttributeCountOptions* Options);
         EOS_EResult       CopyMemberAttributeByIndex(const EOS_LobbyDetails_CopyMemberAttributeByIndexOptions* Options, EOS_Lobby_Attribute** OutAttribute);
         EOS_EResult       CopyMemberAttributeByKey(const EOS_LobbyDetails_CopyMemberAttributeByKeyOptions* Options, EOS_Lobby_Attribute** OutAttribute);
+        EOS_EResult       CopyMemberInfo(const EOS_LobbyDetails_CopyMemberInfoOptions* Options, EOS_LobbyDetails_MemberInfo** OutLobbyDetailsMemberInfo);
         void              Release();
     };
 
@@ -153,6 +154,7 @@ namespace sdk
 
         std::unordered_map<std::string, EOSSDK_LobbyDetails>  _lobbies;
         std::list<EOSSDK_LobbySearch*>                  _lobbies_searchs;
+        std::unordered_map<std::string, Lobby_Infos_pb> _cached_search_results;
         nlohmann::fifo_map<std::string, lobby_invite_t> _lobby_invites;
         std::unordered_map<int32_t, lobby_join_t>       _joins_requests;
 
@@ -161,6 +163,7 @@ namespace sdk
         ~EOSSDK_Lobby();
 
         inline lobby_state_t* get_lobby_by_id(std::string const& lobby_id);
+        void cache_search_result(Lobby_Infos_pb const& lobby);
         std::vector<lobby_state_t*> get_lobbies_from_attributes(google::protobuf::Map<std::string, Lobby_Search_Parameter> const& parameters);
         bool add_member_to_lobby(std::string const& member, lobby_state_t* lobby);
         bool remove_member_from_lobby(std::string const& member, lobby_state_t* lobby);
@@ -206,6 +209,7 @@ namespace sdk
         void               CreateLobby(const EOS_Lobby_CreateLobbyOptions* Options, void* ClientData, const EOS_Lobby_OnCreateLobbyCallback CompletionDelegate);
         void               DestroyLobby(const EOS_Lobby_DestroyLobbyOptions* Options, void* ClientData, const EOS_Lobby_OnDestroyLobbyCallback CompletionDelegate);
         void               JoinLobby(const EOS_Lobby_JoinLobbyOptions* Options, void* ClientData, const EOS_Lobby_OnJoinLobbyCallback CompletionDelegate);
+        void               JoinLobbyById(const EOS_Lobby_JoinLobbyByIdOptions* Options, void* ClientData, const EOS_Lobby_OnJoinLobbyByIdCallback CompletionDelegate);
         void               LeaveLobby(const EOS_Lobby_LeaveLobbyOptions* Options, void* ClientData, const EOS_Lobby_OnLeaveLobbyCallback CompletionDelegate);
         EOS_EResult        UpdateLobbyModification(const EOS_Lobby_UpdateLobbyModificationOptions* Options, EOS_HLobbyModification* OutLobbyModificationHandle);
         void               UpdateLobby(const EOS_Lobby_UpdateLobbyOptions* Options, void* ClientData, const EOS_Lobby_OnUpdateLobbyCallback CompletionDelegate);
@@ -232,5 +236,9 @@ namespace sdk
         EOS_EResult        CopyLobbyDetailsHandleByInviteId(const EOS_Lobby_CopyLobbyDetailsHandleByInviteIdOptions* Options, EOS_HLobbyDetails* OutLobbyDetailsHandle);
         EOS_EResult        CopyLobbyDetailsHandleByUiEventId(const EOS_Lobby_CopyLobbyDetailsHandleByUiEventIdOptions* Options, EOS_HLobbyDetails* OutLobbyDetailsHandle);
         EOS_EResult        CopyLobbyDetailsHandle(const EOS_Lobby_CopyLobbyDetailsHandleOptions* Options, EOS_HLobbyDetails* OutLobbyDetailsHandle);
+        EOS_EResult        GetRTCRoomName(const EOS_Lobby_GetRTCRoomNameOptions* Options, char* OutBuffer, uint32_t* InOutBufferLength);
+        EOS_EResult        IsRTCRoomConnected(const EOS_Lobby_IsRTCRoomConnectedOptions* Options, EOS_Bool* bOutIsConnected);
+        EOS_EResult        GetConnectString(const EOS_Lobby_GetConnectStringOptions* Options, char* OutBuffer, uint32_t* InOutBufferLength);
+        EOS_EResult        ParseConnectString(const EOS_Lobby_ParseConnectStringOptions* Options, char* OutBuffer, uint32_t* InOutBufferLength);
     };
 }

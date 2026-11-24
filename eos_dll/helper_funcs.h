@@ -21,8 +21,10 @@
 
 #include "common_includes.h"
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__)
     #define CLANG_GCC_DONT_OPTIMIZE __attribute__((optnone))
+#elif defined(__GNUC__)
+    #define CLANG_GCC_DONT_OPTIMIZE __attribute__((optimize("O0")))
 #else
     #define CLANG_GCC_DONT_OPTIMIZE
 #endif

@@ -64,6 +64,8 @@ namespace sdk
         uint64_t    _flags;
         std::string _cache_directory;
         uint32_t    _ticket_budget_in_milliseconds;
+        EOS_ENetworkStatus     _network_status;
+        EOS_EApplicationStatus _application_status;
 
         Callback_Manager      *_cb_manager;
         Network               *_network;
@@ -88,6 +90,7 @@ namespace sdk
         ~EOSSDK_Platform();
 
         static EOSSDK_Platform& Inst();
+        bool is_initialized() const { return _platform_init; }
         void Init(const EOS_Platform_Options* options);
 
         void Release();
@@ -116,6 +119,10 @@ namespace sdk
         EOS_EResult SetOverrideCountryCode(const char* NewCountryCode);
         EOS_EResult SetOverrideLocaleCode(const char* NewLocaleCode);
         EOS_EResult CheckForLauncherAndRestart();
+        EOS_ENetworkStatus GetNetworkStatus();
+        EOS_EResult SetNetworkStatus(EOS_ENetworkStatus NewStatus);
+        EOS_EApplicationStatus GetApplicationStatus();
+        EOS_EResult SetApplicationStatus(EOS_EApplicationStatus NewStatus);
     };
 }
 

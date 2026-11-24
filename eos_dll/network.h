@@ -26,6 +26,7 @@
 #include "common_includes.h"
 #include "settings.h"
 #include "task.h"
+#include <set>
 
 class IRunNetwork
 {
@@ -45,12 +46,29 @@ public:
     {
         PortableAPI::tcp_socket socket;
         std::vector<uint8_t> buffer;
-        next_packet_size_t next_packet_size;
+        next_packet_size_t next_packet_size = 0;
+        std::chrono::steady_clock::time_point created_time;
+    };
+
+    struct pending_connect_t
+    {
+        PortableAPI::tcp_socket socket;
+        PortableAPI::ipv4_addr target_addr;
+        std::chrono::steady_clock::time_point created_time;
     };
 
 private:
-    static constexpr uint16_t network_port = 55789;
-    static constexpr uint16_t max_network_port = (network_port + 10);
+    static constexpr uint16_t default_network_port = 55789;
+    static constexpr uint16_t network_port_range = 10;
+    uint16_t _discovery_port;
+    uint16_t _max_discovery_port;
+
+    struct dns_cache_entry_t
+    {
+        bool ok = false;
+        uint32_t ip = 0;
+        std::chrono::steady_clock::time_point resolved_at;
+    };
 
 #if defined(NETWORK_COMPRESS)
     // Performance counters
@@ -76,12 +94,18 @@ private:
 
     PortableAPI::tcp_socket _tcp_socket;
     std::list<tcp_buffer_t> _tcp_clients;
-    std::map<peer_t, PortableAPI::tcp_socket> _waiting_connect_tcp_clients;
+    std::map<peer_t, pending_connect_t>       _waiting_connect_tcp_clients;
     std::map<peer_t, tcp_buffer_t>            _waiting_out_tcp_clients;
     std::list<tcp_buffer_t>                   _waiting_in_tcp_clients;
     PortableAPI::tcp_socket _tcp_self_send;
     tcp_buffer_t _tcp_self_recv;
     std::map<peer_t, PortableAPI::tcp_socket*> _tcp_peers;
+    std::map<peer_t, uint16_t> _peer_advertised_tcp_ports;
+    std::map<std::string, dns_cache_entry_t> _dns_cache;
+    std::map<peer_t, std::chrono::steady_clock::time_point> _dup_id_warn_times;
+    std::set<std::string> _logged_large_subnets;
+
+    std::function<bool(Network_Message_pb const&)> _immediate_p2p_handler;
 
     std::map<Network_Message_pb::MessagesCase, std::map<channel_t, std::vector<IRunNetwork*>>> _network_listeners;
 
@@ -110,15 +134,19 @@ private:
     std::chrono::milliseconds get_advertise_rate();
 
     void add_new_tcp_client(PortableAPI::tcp_socket* cli, std::vector<peer_t> const& peer_ids, bool advertise);
+    void remove_orphaned_tcp_socket(PortableAPI::tcp_socket* cli);
     void remove_tcp_peer(tcp_buffer_t& tcp_buffer);
     void connect_to_peer(PortableAPI::ipv4_addr& addr, peer_t const& peer_id);
+    bool finish_outgoing_tcp_connect(peer_t const& peer_id, pending_connect_t& pending);
+    bool resolve_ipv4_host(std::string const& host, uint32_t& out_ip);
     void process_waiting_out_clients();
     void process_waiting_in_client();
 
     void process_network_message(Network_Message_pb& msg);
     void process_udp();
     void process_tcp_listen();
-    void process_tcp_data(tcp_buffer_t& tcp_buffer);
+    bool process_tcp_data(tcp_buffer_t& tcp_buffer);
+    void rebuild_fd_sets();
     void network_thread();
     task _network_task;
 
@@ -142,6 +170,7 @@ public:
 
     void register_listener  (IRunNetwork* listener, channel_t channel, Network_Message_pb::MessagesCase type);
     void unregister_listener(IRunNetwork* listener, channel_t channel, Network_Message_pb::MessagesCase type);
+    void set_immediate_p2p_handler(std::function<bool(Network_Message_pb const&)> handler);
 
     bool CBRunFrame(channel_t channel, Network_Message_pb::MessagesCase MessageFilter = Network_Message_pb::MessagesCase::MESSAGES_NOT_SET);
 

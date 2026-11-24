@@ -1,0 +1,19 @@
+{
+  "username": "",
+  "epicid": "",
+  "productuserid": "",
+  "appid": "2223980",
+  "gamename": "Nomad Drive",
+  "language": "zh-Hant",
+  "savepath": "appdata",
+  "enable_lan_broadcast": true,
+  "custom_broadcast": "",
+  "discovery_port": 55789,
+  "tcp_port": 0,
+  "unlock_dlcs": true,
+  "enable_overlay": false,
+  "disable_online_networking": false,
+  "keep_lobby_on_destroy": false,
+  "suppress_member_disconnect_notify": false,
+  "log_level": "OFF"
+}

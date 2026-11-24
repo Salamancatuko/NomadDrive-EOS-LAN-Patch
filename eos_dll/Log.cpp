@@ -28,6 +28,8 @@ decltype(Log::_log_func)       Log::_log_func  = default_log_func;
 
 void Log::default_log_func(void* user_param, Log::LogLevel lv, const char* log_message)
 {
+    static std::mutex log_mutex;
+    std::lock_guard<std::mutex> lk(log_mutex);
     static std::ofstream log_file("nemirtingassteamemu.log", std::ios::trunc | std::ios::out);
 
 #if defined(__WINDOWS__)
@@ -35,22 +37,13 @@ void Log::default_log_func(void* user_param, Log::LogLevel lv, const char* log_m
     {
         OutputDebugString(log_message);
     }
-    else
-    {
-        static bool console = false;
-        if (!console)
-        {
-            AllocConsole();
-            freopen("CONOUT$", "w", stdout);
-        }
-
-        fprintf(stdout, "%s", log_message);
-    }
 #endif
 
-    log_file << log_message;
-    log_file.flush();
-    fprintf(stderr, "%s", log_message);
+    if (log_file.is_open())
+    {
+        log_file << log_message;
+        log_file.flush();
+    }
 }
 
 bool Log::_trace(const char* format, va_list argptr)

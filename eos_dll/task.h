@@ -86,4 +86,10 @@ public:
         if(_thread.joinable())
             _thread.join();
     }
+
+    void detach()
+    {
+        if(_thread.joinable())
+            _thread.detach();
+    }
 };

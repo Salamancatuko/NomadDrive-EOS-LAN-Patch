@@ -307,6 +307,19 @@ EOS_EResult EOSSDK_Sessions::CreateSessionModification(const EOS_Sessions_Create
 
     switch (Options->ApiVersion)
     {
+        default:
+            if (Options->ApiVersion > EOS_SESSIONS_CREATESESSIONMODIFICATION_API_003)
+            {
+                APP_LOG(Log::LogLevel::WARN, "Unknown EOS_Sessions_CreateSessionModification ApiVersion %d, parsing as API_003", Options->ApiVersion);
+            }
+            else
+            {
+                APP_LOG(Log::LogLevel::ERR, "Unsupported EOS_Sessions_CreateSessionModification ApiVersion %d", Options->ApiVersion);
+                delete modif;
+                set_nullptr(OutSessionModificationHandle);
+                return EOS_EResult::EOS_IncompatibleVersion;
+            }
+
         case EOS_SESSIONS_CREATESESSIONMODIFICATION_API_003:
         {
             const EOS_Sessions_CreateSessionModificationOptions003* opts = reinterpret_cast<const EOS_Sessions_CreateSessionModificationOptions003*>(Options);
@@ -341,10 +354,6 @@ EOS_EResult EOSSDK_Sessions::CreateSessionModification(const EOS_Sessions_Create
             APP_LOG(Log::LogLevel::DEBUG, "Starting session creation: session_name = %s, bucket_id = %s, presence_enabled: %d", modif->_session_name.c_str(), modif->_infos.bucket_id().c_str(), (int)modif->_infos.presence_allowed());
         }
         break;
-
-        default:
-            APP_LOG(Log::LogLevel::FATAL, "Unmanaged API version %d", Options->ApiVersion);
-            abort();
     }
     
 
@@ -390,16 +399,26 @@ EOS_EResult EOSSDK_Sessions::UpdateSessionModification(const EOS_Sessions_Update
     {
         switch (Options->ApiVersion)
         {
+            default:
+                if (Options->ApiVersion > EOS_SESSIONS_UPDATESESSIONMODIFICATION_API_001)
+                {
+                    APP_LOG(Log::LogLevel::WARN, "Unknown EOS_Sessions_UpdateSessionModification ApiVersion %d, parsing as API_001", Options->ApiVersion);
+                }
+                else
+                {
+                    APP_LOG(Log::LogLevel::ERR, "Unsupported EOS_Sessions_UpdateSessionModification ApiVersion %d", Options->ApiVersion);
+                    delete modif;
+                    set_nullptr(OutSessionModificationHandle);
+                    return EOS_EResult::EOS_IncompatibleVersion;
+                }
+
             case EOS_SESSIONS_UPDATESESSIONMODIFICATION_API_001:
             {
                 const EOS_Sessions_UpdateSessionModificationOptions001* opts = reinterpret_cast<const EOS_Sessions_UpdateSessionModificationOptions001*>(Options);
+                (void)opts;
                 APP_LOG(Log::LogLevel::DEBUG, "Starting session modification: session_name = %s", modif->_session_name.c_str());
             }
             break;
-
-            default:
-                APP_LOG(Log::LogLevel::FATAL, "Unmanaged API version %d", Options->ApiVersion);
-                abort();
         }
     }
     

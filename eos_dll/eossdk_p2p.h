@@ -62,11 +62,19 @@ namespace sdk
         EOS_ERelayControl _relay_control;
         uint16_t _p2p_port;
         uint16_t _max_additional_ports_to_try;
+        uint64_t _incoming_packet_queue_max_size_bytes;
+        uint64_t _outgoing_packet_queue_max_size_bytes;
+
+        bool _has_cached_established;
+        EOS_ProductUserId _cached_established_remote_id;
+        EOS_EConnectionEstablishedType _cached_established_type;
+        std::string _cached_established_socket_name;
 
     public:
         EOSSDK_P2P();
         ~EOSSDK_P2P();
 
+        bool try_immediate_p2p_data(Network_Message_pb const& msg);
         void set_p2p_state_connected(EOS_ProductUserId remote_id, p2p_state_t& state);
 
         // Send Network messages
@@ -110,5 +118,10 @@ namespace sdk
         EOS_EResult        GetRelayControl(const EOS_P2P_GetRelayControlOptions* Options, EOS_ERelayControl* OutRelayControl);
         EOS_EResult        SetPortRange(const EOS_P2P_SetPortRangeOptions* Options);
         EOS_EResult        GetPortRange(const EOS_P2P_GetPortRangeOptions* Options, uint16_t* OutPort, uint16_t* OutNumAdditionalPortsToTry);
+        EOS_EResult        GetPacketQueueInfo(const EOS_P2P_GetPacketQueueInfoOptions* Options, EOS_P2P_PacketQueueInfo* OutPacketQueueInfo);
+        EOS_EResult        SetPacketQueueSize(const EOS_P2P_SetPacketQueueSizeOptions* Options);
+        EOS_EResult        ClearPacketQueue(const EOS_P2P_ClearPacketQueueOptions* Options);
+        EOS_NotificationId AddNotifyIncomingPacketQueueFull(const EOS_P2P_AddNotifyIncomingPacketQueueFullOptions* Options, void* ClientData, const EOS_P2P_OnIncomingPacketQueueFullCallback IncomingPacketQueueFullHandler);
+        void               RemoveNotifyIncomingPacketQueueFull(EOS_NotificationId NotificationId);
     };
 }

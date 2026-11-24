@@ -18,6 +18,25 @@
  */
 
 #include "file_manager.h"
+#include <filesystem>
+#include <sys/stat.h>
+
+#ifdef __WINDOWS__
+static std::wstring utf8_to_wide(std::string const& s)
+{
+    std::wstring out;
+    if (utf8::is_valid(s.begin(), s.end()))
+    {
+        utf8::utf8to16(s.begin(), s.end(), std::back_inserter(out));
+    }
+    else
+    {
+        for (unsigned char c : s)
+            out.push_back(static_cast<wchar_t>(c));
+    }
+    return out;
+}
+#endif
 
 constexpr decltype(FileManager::separator) FileManager::separator;
 
@@ -66,7 +85,11 @@ std::string FileManager::canonical_path(std::string const& _path)
 size_t FileManager::file_size(std::string const& _path)
 {
     std::string path(canonical_path(_path));
+#ifdef __WINDOWS__
+    std::ifstream in_file(std::filesystem::path(utf8_to_wide(path)), std::ios::in | std::ios::binary);
+#else
     std::ifstream in_file(path, std::ios::in | std::ios::binary);
+#endif
     if (in_file)
     {
         in_file.seekg(0, std::ios::end);
@@ -79,9 +102,15 @@ size_t FileManager::file_size(std::string const& _path)
 time_t FileManager::file_atime(std::string const& _path)
 {
     std::string path(canonical_path(_path));
+#ifdef __WINDOWS__
+    struct __stat64 file_stat = {};
+    if (_wstat64(utf8_to_wide(path).c_str(), &file_stat) != 0)
+        return 0;
+#else
     struct stat file_stat = {};
     if (stat(path.c_str(), &file_stat) != 0)
         return 0;
+#endif
 
     return file_stat.st_atime;
 }
@@ -89,9 +118,15 @@ time_t FileManager::file_atime(std::string const& _path)
 time_t FileManager::file_mtime(std::string const& _path)
 {
     std::string path(canonical_path(_path));
+#ifdef __WINDOWS__
+    struct __stat64 file_stat = {};
+    if (_wstat64(utf8_to_wide(path).c_str(), &file_stat) != 0)
+        return 0;
+#else
     struct stat file_stat = {};
     if (stat(path.c_str(), &file_stat) != 0)
         return 0;
+#endif
 
     return file_stat.st_mtime;
 }
@@ -99,30 +134,48 @@ time_t FileManager::file_mtime(std::string const& _path)
 time_t FileManager::file_ctime(std::string const& _path)
 {
     std::string path(canonical_path(_path));
+#ifdef __WINDOWS__
+    struct __stat64 file_stat = {};
+    if (_wstat64(utf8_to_wide(path).c_str(), &file_stat) != 0)
+        return 0;
+#else
     struct stat file_stat = {};
     if (stat(path.c_str(), &file_stat) != 0)
         return 0;
+#endif
 
     return file_stat.st_ctime;
 }
 
 std::ifstream FileManager::open_read(std::string const& path, std::ios::openmode open_mode)
 {
+#ifdef __WINDOWS__
+    return std::ifstream(std::filesystem::path(utf8_to_wide(canonical_path(path))), open_mode | std::ios::in);
+#else
     return std::ifstream(canonical_path(path), open_mode | std::ios::in);
+#endif
 }
 
 std::ofstream FileManager::open_write(std::string const& _path, std::ios::openmode open_mode)
 {
     std::string path(canonical_path(_path));
     create_directory(dirname(_path));
+#ifdef __WINDOWS__
+    return std::ofstream(std::filesystem::path(utf8_to_wide(path)), open_mode | std::ios::out);
+#else
     return std::ofstream(path, open_mode | std::ios::out);
+#endif
 }
 
 std::fstream  FileManager::open_readwrite(std::string const& _path, std::ios::openmode open_mode)
 {
     std::string path(canonical_path(_path));
     create_directory(dirname(_path));
+#ifdef __WINDOWS__
+    return std::fstream(std::filesystem::path(utf8_to_wide(path)), open_mode | std::ios::out | std::ios::in);
+#else
     return std::fstream(path, open_mode | std::ios::out | std::ios::in);
+#endif
 }
 
 #ifdef __WINDOWS__

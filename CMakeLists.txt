@@ -1,7 +1,7 @@
 #CMAKE_TOOLCHAIN_FILE
 
 project(nemirtingas_epic_emu)
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.10)
 
 # Workaround because cross-compiling with CMake + vcpkg fucks up this variable
 # making the 'find_*' functions/macros somehow fail to find the right arch.
@@ -115,10 +115,10 @@ option(DISABLE_LOG "Disable all logging. Will reduce emu size and will speed it 
 
 option(USE_ZSTD_COMPRESS "Use zstd to compress network messages" OFF)
 
-set(Protobuf_USE_STATIC_LIBS ON)
-include(FindProtobuf)
-find_package(Protobuf CONFIG REQUIRED)
 find_package(Threads REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PROTOBUF_LITE REQUIRED protobuf-lite)
+find_program(PROTOC_EXECUTABLE protoc REQUIRED)
 
 if(USE_ZSTD_COMPRESS)
   find_package(zstd CONFIG REQUIRED)
@@ -126,7 +126,18 @@ endif()
 
 ########################################
 ## net.h net.cc
-protobuf_generate_cpp(net_PROTO_SRCS net_PROTO_HDRS proto/network_proto.proto)
+set(net_PROTO_SRCS "${CMAKE_CURRENT_BINARY_DIR}/network_proto.pb.cc")
+set(net_PROTO_HDRS "${CMAKE_CURRENT_BINARY_DIR}/network_proto.pb.h")
+add_custom_command(
+  OUTPUT "${net_PROTO_SRCS}" "${net_PROTO_HDRS}"
+  COMMAND "${PROTOC_EXECUTABLE}"
+          --cpp_out=${CMAKE_CURRENT_BINARY_DIR}
+          -I${CMAKE_CURRENT_SOURCE_DIR}/proto
+          ${CMAKE_CURRENT_SOURCE_DIR}/proto/network_proto.proto
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/proto/network_proto.proto"
+  COMMENT "Generating protobuf sources for network_proto.proto"
+  VERBATIM
+)
 
 ########################################
 ## steamclient[64].dll
@@ -178,24 +189,38 @@ add_library(
   ${utils_sources}
 )
 
-if(UNIX)
-  SET_TARGET_PROPERTIES(${EPIC_API} PROPERTIES PREFIX "")
+SET_TARGET_PROPERTIES(${EPIC_API} PROPERTIES PREFIX "")
+
+if(MINGW)
+  target_link_options(
+    ${EPIC_API}
+    PRIVATE
+    -static
+    -static-libgcc
+    -static-libstdc++
+    -Wl,--exclude-libs,ALL
+    $<$<CONFIG:Release>:-s>
+  )
 endif()
 
 target_link_libraries(
   ${EPIC_API}
-  protobuf::libprotobuf-lite
+  ${PROTOBUF_LITE_STATIC_LDFLAGS}
   Threads::Threads
   $<$<BOOL:${USE_ZSTD_COMPRESS}>:libzstd>
 
   # For library network
   $<$<BOOL:${WIN32}>:ws2_32>
   $<$<BOOL:${WIN32}>:iphlpapi>
+  $<$<BOOL:${WIN32}>:winhttp>
+  $<$<BOOL:${WIN32}>:dbghelp>
+  $<$<BOOL:${WIN32}>:bcrypt>
+  $<$<BOOL:${WIN32}>:advapi32>
   # For library play .wav
   #$<$<BOOL:${WIN32}>:winmm>
   $<$<BOOL:${WIN32}>:shell32>
   $<$<BOOL:${WIN32}>:user32>
-  $<$<BOOL:${WIN32}>:abseil_dll>
+  $<$<AND:$<BOOL:${WIN32}>,$<BOOL:${MSVC}>>:abseil_dll>
 
   # For library .so/.dylib loading
   $<$<BOOL:${UNIX}>:dl>
@@ -220,6 +245,7 @@ target_compile_options(
   ${EPIC_API}
   PUBLIC
   
+  $<$<BOOL:${MINGW}>:-fpermissive -Wno-deprecated-declarations>
   $<$<BOOL:${UNIX}>:-fPIC -fpermissive -fvisibility=hidden -Wl,--exclude-libs,ALL>
   $<$<AND:$<BOOL:${UNIX}>,$<BOOL:${X86}>>:-m32>
   $<$<AND:$<BOOL:${UNIX}>,$<BOOL:${X64}>>:-m64>
@@ -235,6 +261,7 @@ target_compile_definitions(
   __EXPORT_SYMBOLS__
   EPIC_SHARED_LIBRARY
   EPIC_EXPORT
+  UTILS_EXPORT_LIBRARY
 
   $<$<BOOL:${USE_ZSTD_COMPRESS}>:NETWORK_COMPRESS>
   

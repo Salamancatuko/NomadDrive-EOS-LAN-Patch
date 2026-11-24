@@ -54,6 +54,7 @@ public:
 
     bool _sdk_initialized;
 
+    std::recursive_mutex _ids_mutex;
     std::map<std::string, EOS_EpicAccountId> _epicuserids;
     std::map<std::string, EOS_ProductUserId> _productuserids;
 

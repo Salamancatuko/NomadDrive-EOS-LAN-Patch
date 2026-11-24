@@ -1,67 +1,30 @@
-# Nemirtingas Epic Emulator Redux
+# Nomad Drive v1.0.1 — EOS 局域網／跨網段聯機補丁
 
-Full credit to my mentor, Nemirtingas, whose original work—driven by his enthusiastic support for piracy and strong opposition to Epic Games—provided the essential foundation for this emulator. While I personally disagree with his stance on piracy, I can’t overlook the significant impact of his contributions. Although his original repository was taken down—likely due to reasons best left unspoken—his influence remains crucial to this effort. For those interested in further technical support or guidance, Nemirtingas is available on http://element.io, where he’s more than willing to assist those aligned with his views on open software.
+> **適用範圍**：本專案與發行補丁僅針對 **Nomad Drive v1.0.1** 驗證打包（不保證適用於其他遊戲）。
+> 下載即用補丁包（`NomadDrive-EOS-LAN-Patch-v1.0.1.zip`）：**[Releases v1.0.1](https://github.com/Salamancatuko/NomadDrive-EOS-LAN-Patch/releases/tag/v1.0.1)**
 
-# Debug log levels
+---
 
-This is a project to try to understand how the eos api works under the hood.
+## 簡明原理
 
-Valid debug levels: (only in debug version)
+*Nomad Drive* 聯機底層透過 `EOSSDK-Win64-Shipping.dll`（Epic Online Services）搜尋大廳並建立 P2P 連線。本補丁替換該 DLL，將大廳與 P2P 改走 **本機 UDP 探索＋TCP 直連**（免 Steam、免外網），並修復客機閃退無法重連、Windows 非 `/24` 子網遮罩、動態網卡刷新及中文路徑等問題；所有相依庫已靜態連結，免安裝額外運行庫。
 
-```
-TRACE: Very verbose, will log DEBUG + All functions enter
-DEBUG: Very verbose, will log INFO  + Debug infos like function parameters
-INFO : verbose     , will log WARN  + some informations about code execution and TODOs
-WARN : not verbose , will log ERR   + some warnings about code execution
-ERR  : not verbose , will log FATAL + errors about code execution
-FATAL: not verbose , will log only Fatal errors like unimplemented steam_api versions
-OFF  : no logs     , saves cpu usage when running the debug versions
-```
+## 致謝原作者
 
+- **[Nemirtingas](https://gitlab.com/Nemirtingas)** — 原版 *Nemirtingas's Epic Emulator* 作者（LGPL-3.0）。
+- **[psfree](https://github.com/psfree/eos_sdk_emu)** — 上游分支 `psfree/eos_sdk_emu` 維護與貢獻者。
 
-# Internals - Any reference to "config file" is the emulator config file: NemirtingasEpicEmu.json
-- **The config file is generated if it is missing**. If you're lazy to build one or copy the example, just don't do it, the emu will do it for you. **You might want** to create a simple json with only { "username": "MyAwesomeUsername" } to let the emulator know who you are and generate a consistent id.
-- { "username": "DefaultName" }: it is used to generate your epicid if you want to (see "epicid" entry below). Some games use it to set your in-game username, some don't (like civilization 6).
-- **[MUST BE UNIQUE][AUTO GENERATED]** { "epicid": "156abc156f1c5487f91c" }: is generated if it is missing or invalid. An epicid is invalid if it does contain non-hex chars (Anything not 0,1,2,3,4,5,6,7,8,9,a,b,c,d,e,f) but it **can** start with 0x (the hex prefix)
-  - If the "epicid" is missing or invalid, it will be generated based on some rules
-    1. Your username is "DefaultName" ( "username": "DefaultName"), the epicid is generated randomly. (it prevents users that doesn't setup correctly the emu to have duplicated epicids)
-    2. Your username is not "DefaultName" ("username": "SomethingGreat"), the epicid is generated using your username as a seed making it the same whatever you do. (Playing another game, another computer)
-    3. If it is not invalid or missing, it will be left untouched, so you can modify it to any **valid** epicid you want
-- **[MUST BE UNIQUE][AUTO GENERATED]** { "productuserid": "156abc156f1c5487f91c" }: is generated if it is missing or invalid. Is it used to identify a peer on the network allowing multiplayer. An productuserid is invalid if it does contain non-hex chars (Anything not 0,1,2,3,4,5,6,7,8,9,a,b,c,d,e,f)
-  - If the "productuserid" is missing or invalid, it will be generated based on some rules
-    1. If the product user id is invalid or missing, it will be generated with the appid + epicid as a seed.
-    2. If it is not invalid or missing, it will be left untouched, so you can modify it to any **valid** epicid you want
-- { "appid": "CrabTest" }: This **will** be used to search friends and lobbies that use the same appid. It can be retrieved on https://epicdata.info/items/ For example, for Satisfactory experimental, search for Satisfactory and click on the main game's item. The appid is in the "releaseInfo", the "appId" field.
-- { "savepath": "xxxxx" }: it is used to decide where your "cloud" saves, achievements, items, dlcs go. It has 1 special value:
-  1. { "savepath" : "appdata" }:
-    - On Windows, saves will go in: %appdata%\NemirtingasEpicEmu\
-    - On Linux, saves will go in: $XDG_DATA_HOME/NemirtingasEpicEmu or $HOME/.local/share/NemirtingasEpicEmu if $XDG_DATA_HOME is not set in the env.
-    - On MacOS, saves will go in $HOME/NemirtingasEpicEmu
-  2. { "savepath": "something" }: (savepath can be empty like { "savepath": "" }), saves will go in the directory specified by savepath, relative to the game's working directory. In the example, it could be "game dir"\something\NemirtingasEpicEmu or "game dir"\NemirtingasEpicEmu.
-- { "disable_online_networking": true|false }: it will try to disable all **online** networking, not lan or vpn. This prevents games to go on the internet. If your game crash and you've set this to true, try to set it to false. I use my own solution to override the classic network functions, it can be buggy.
-- { "enable_overlay": true|false}: For **for future use**, it will allow you to have an overlay like the EOS social overlay, invite people to games and receive notifications like achievements unlocked.
-- { "gamename": "DefaultGameName" }: If the gamename is "DefaultGameName" or missing, the emulator will replace it with what the game provides it.
-- { "unlock_dlcs": true|false }: This will try to enable all dlcs/items that the game requests. If the game wants more infos on em it might not work. (Like unlock_all_dlcs on a steam emu, some need you to provide the appid = name).
-- { "log_level": "OFF|FATAL|ERR|WARN|INFO|DEBUG|TRACE" }: Decides how verbose the emulator will be, for debugging purpose. Defaults to OFF
-- { "language": "en" }: Sets the user language. It follows the ISO639 language codes. Search on the web for your language code if needed. Defaults to "en".
-- { "custom_broadcast": "192.168.200.255" }: Sets an IP subnet for custom broadcasts. If your LAN software does not allow broadcast messages (ex. nebula), you will need to provide the subnet of your IP range. The last number is ignored and can be any value from 0 to 255
+---
 
-# Building with windows for dummies
-- Install Visual Studio 17 2022. You want C/C++ app support.
-- Install pwsh. Open powershell and run: winget install --id Microsoft.PowerShell --source winget
-- Install vcpkg: https://learn.microsoft.com/en-us/vcpkg/get_started/get-started?pivots=shell-powershell . Follow the bootstrap instructions.
-	- Run "vcpkg install protobuf", "vcpkg install nlohmann-json"
-- Install cmake for windows. Open cmake-gui and point it to the source code. Create a separate build folder if you want and point it to that.
-	- Hit configure.  Choose "Specify Toolchain file for cross-compiling". Choose ..\vcpkg\scripts\buildsystems\vcpkg.cmake
-	- Hit "Add Entry" Add "X64" as a string set to "ON".
-	- Hit Configure, then Generate. Then hit Open Project
+## 如何使用與注意事項
 
- ## 32bit
--Same initial steps
-- Run "vcpkg install protobuf:x86-windows", "vcpkg install nlohmann-json:x86-windows"
-- Open cmake-gui
-	- Hit configure.  Choose "Specify Toolchain file for cross-compiling". Choose ..\vcpkg\scripts\buildsystems\vcpkg.cmake
-	- Hit "Add Entry" Add "X86" as a string set to "ON".
-	- Hit Configure, then Generate. Then hit Open Project
-   	- If it throws an error change VCPKG-TARGET-TRIPLET from x64-windows to x86-windows . After that, try the above step again to generate.
- 
+完整圖文與各網路環境範例請直接下載解壓壓縮包或檢視 **[使用說明.md](./使用說明.md)**：
+
+1. **安裝位置**：關閉遊戲並備份原版後，將 `EOSSDK-Win64-Shipping.dll` 覆蓋至 `Nomad Drive_Data\Plugins\x86_64\`，並把範本 `NemirtingasEpicEmu.json` 放於 `Nomad Drive.exe` 旁（房主建議改用 `presets/NomadDrive-Host-NemirtingasEpicEmu.json` 並更名為 `NemirtingasEpicEmu.json` 以支援客機閃退重連）。
+2. **切勿複製已生成的設定檔**：每台電腦首次啟動會寫入隨機 `epicid` 與 `productuserid`，直接複製給朋友會造成 ID 衝突無法連線。
+3. **跨網段／VPN／埠轉發**：在 `custom_broadcast` 填入目標 IP、CIDR（如 `192.168.20.0/24`）、IP 區間（`192.168.20.10-50`）或主機名，支援單邊探索；跨公網可固定 `discovery_port` 與 `tcp_port` 進行埠轉發。
+4. **防火牆**：首次執行請放行遊戲網路權限，或開放 UDP `55789–55798` 入站規則。
+
+## 自行編譯與授權
+
+本倉庫原始碼延續上游 **GNU LGPL v3.0** 授權；編譯環境為 Windows + MSYS2 MinGW64（GCC C++17 + `protobuf-lite` 靜態連結）。詳細設定檔範本位於 [`release_templates/`](./release_templates/)。

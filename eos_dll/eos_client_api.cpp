@@ -43,6 +43,7 @@ EOSSDK_Client& EOSSDK_Client::Inst()
 
 EOS_EpicAccountId EOSSDK_Client::get_epicuserid(std::string const& userid)
 {
+    std::lock_guard<std::recursive_mutex> lk(_ids_mutex);
     EOS_EpicAccountId res;
     if (userid.empty())
         return GetInvalidEpicUserId();
@@ -63,6 +64,7 @@ EOS_EpicAccountId EOSSDK_Client::get_epicuserid(std::string const& userid)
 
 EOS_ProductUserId EOSSDK_Client::get_productuserid(std::string const& userid)
 {
+    std::lock_guard<std::recursive_mutex> lk(_ids_mutex);
     EOS_ProductUserId res;
     if (userid.empty())
         return GetInvalidProductUserId();
@@ -144,12 +146,22 @@ EOS_DECLARE_FUNC(EOS_EResult) EOS_Initialize(const EOS_InitializeOptions* Option
 
     if (set_eos_compat(Options->ApiVersion))
     {
-        APP_LOG(Log::LogLevel::FATAL, "Couldn't replace our dummy EOS_Auth_CopyUserAuthToken, the function will not work and thus we terminate.");
-        abort();
+        APP_LOG(Log::LogLevel::WARN, "Couldn't replace our dummy EOS_Auth_CopyUserAuthToken, continuing anyway");
     }
 
     switch (Options->ApiVersion)
     {
+        default:
+            if (Options->ApiVersion > EOS_INITIALIZE_API_004)
+            {
+                APP_LOG(Log::LogLevel::WARN, "Unknown EOS_Initialize ApiVersion %d, ignoring the rest of the options struct", Options->ApiVersion);
+            }
+            else
+            {
+                APP_LOG(Log::LogLevel::ERR, "Unsupported EOS_Initialize ApiVersion %d", Options->ApiVersion);
+                return EOS_EResult::EOS_IncompatibleVersion;
+            }
+
         case EOS_INITIALIZE_API_004:
         {
             auto p = reinterpret_cast<const EOS_InitializeOptions004*>(Options);
@@ -200,10 +212,6 @@ EOS_DECLARE_FUNC(EOS_EResult) EOS_Initialize(const EOS_InitializeOptions* Option
                 inst._product_version = Options->ProductVersion;
         }
         break;
-
-        default:
-            APP_LOG(Log::LogLevel::FATAL, "Unmanaged API version %d", Options->ApiVersion);
-            abort();
     }
 
     inst._sdk_initialized = true;
@@ -473,6 +481,7 @@ EOS_DECLARE_FUNC(EOS_Bool) EOS_EpicAccountId_IsValid(EOS_EpicAccountId AccountId
     if (AccountId == nullptr)
         return EOS_FALSE;
 
+    std::lock_guard<std::recursive_mutex> lk(EOSSDK_Client::Inst()._ids_mutex);
     auto& user_ids = EOSSDK_Client::Inst()._epicuserids;
     auto it = std::find_if(user_ids.begin(), user_ids.end(), [AccountId](std::pair<std::string const, EOS_EpicAccountId>& user_id)
     {
@@ -513,6 +522,7 @@ EOS_DECLARE_FUNC(EOS_EResult) EOS_EpicAccountId_ToString(EOS_EpicAccountId Accou
     if (AccountId == nullptr || !AccountId->IsValid())
         return EOS_EResult::EOS_InvalidUser;
 
+    std::lock_guard<std::recursive_mutex> lk(EOSSDK_Client::Inst()._ids_mutex);
     auto& user_ids = EOSSDK_Client::Inst()._epicuserids;
     auto it = std::find_if(user_ids.begin(), user_ids.end(), [AccountId](std::pair<std::string const, EOS_EpicAccountId>& user_id)
     {
@@ -559,6 +569,7 @@ EOS_DECLARE_FUNC(EOS_Bool) EOS_ProductUserId_IsValid(EOS_ProductUserId AccountId
     if (AccountId == nullptr)
         return EOS_FALSE;
 
+    std::lock_guard<std::recursive_mutex> lk(EOSSDK_Client::Inst()._ids_mutex);
     auto& product_ids = EOSSDK_Client::Inst()._productuserids;
     auto it = std::find_if(product_ids.begin(), product_ids.end(), [AccountId]( std::pair<std::string const, EOS_ProductUserId>& product_id)
     {
@@ -595,6 +606,7 @@ EOS_DECLARE_FUNC(EOS_EResult) EOS_ProductUserId_ToString(EOS_ProductUserId Accou
     if (AccountId == nullptr || !AccountId->IsValid())
         return EOS_EResult::EOS_InvalidUser;
 
+    std::lock_guard<std::recursive_mutex> lk(EOSSDK_Client::Inst()._ids_mutex);
     auto& product_ids = EOSSDK_Client::Inst()._productuserids;
     auto it = std::find_if(product_ids.begin(), product_ids.end(), [AccountId]( std::pair<std::string const, EOS_ProductUserId>& product_id)
     {
@@ -701,7 +713,13 @@ EOS_DECLARE_FUNC(const char*) EOS_GetVersion(void)
         { "1.7.0", "1.7.0-13812567" },
         { "1.7.1", "1.7.1-13992660" },
         { "1.8.0", "1.8.0-14316386" },
+        { "1.16.4", "1.16.4-36651368" },
+        { "1.19.0.3", "1.19.0.3-49960398" },
     };
-    
-    return versions[EOS_VERSION_STRING];
+
+    auto it = versions.find(EOS_VERSION_STRING);
+    if (it != versions.end())
+        return it->second;
+
+    return "1.19.0.3-49960398";
 }

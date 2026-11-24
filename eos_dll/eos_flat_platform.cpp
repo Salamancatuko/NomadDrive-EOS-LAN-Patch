@@ -240,6 +240,65 @@ EOS_DECLARE_FUNC(EOS_EResult) EOS_Platform_CheckForLauncherAndRestart(EOS_HPlatf
     return pInst->CheckForLauncherAndRestart();
 }
 
+EOS_DECLARE_FUNC(EOS_ENetworkStatus) EOS_Platform_GetNetworkStatus(EOS_HPlatform Handle)
+{
+    if (Handle == nullptr)
+        return EOS_ENetworkStatus::EOS_NS_Disabled;
+
+    auto pInst = reinterpret_cast<EOSSDK_Platform*>(Handle);
+    return pInst->GetNetworkStatus();
+}
+
+EOS_DECLARE_FUNC(EOS_EResult) EOS_Platform_SetNetworkStatus(EOS_HPlatform Handle, EOS_ENetworkStatus NewStatus)
+{
+    if (Handle == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
+    auto pInst = reinterpret_cast<EOSSDK_Platform*>(Handle);
+    return pInst->SetNetworkStatus(NewStatus);
+}
+
+EOS_DECLARE_FUNC(const char*) EOS_ENetworkStatus_ToString(EOS_ENetworkStatus NetworkStatus)
+{
+    switch (NetworkStatus)
+    {
+        case EOS_ENetworkStatus::EOS_NS_Disabled: return "EOS_NS_Disabled";
+        case EOS_ENetworkStatus::EOS_NS_Offline:  return "EOS_NS_Offline";
+        case EOS_ENetworkStatus::EOS_NS_Online:   return "EOS_NS_Online";
+        default:                                  return "Unknown";
+    }
+}
+
+EOS_DECLARE_FUNC(EOS_EApplicationStatus) EOS_Platform_GetApplicationStatus(EOS_HPlatform Handle)
+{
+    if (Handle == nullptr)
+        return EOS_EApplicationStatus::EOS_AS_BackgroundConstrained;
+
+    auto pInst = reinterpret_cast<EOSSDK_Platform*>(Handle);
+    return pInst->GetApplicationStatus();
+}
+
+EOS_DECLARE_FUNC(EOS_EResult) EOS_Platform_SetApplicationStatus(EOS_HPlatform Handle, EOS_EApplicationStatus NewStatus)
+{
+    if (Handle == nullptr)
+        return EOS_EResult::EOS_InvalidParameters;
+
+    auto pInst = reinterpret_cast<EOSSDK_Platform*>(Handle);
+    return pInst->SetApplicationStatus(NewStatus);
+}
+
+EOS_DECLARE_FUNC(const char*) EOS_EApplicationStatus_ToString(EOS_EApplicationStatus ApplicationStatus)
+{
+    switch (ApplicationStatus)
+    {
+        case EOS_EApplicationStatus::EOS_AS_BackgroundConstrained:   return "EOS_AS_BackgroundConstrained";
+        case EOS_EApplicationStatus::EOS_AS_BackgroundUnconstrained: return "EOS_AS_BackgroundUnconstrained";
+        case EOS_EApplicationStatus::EOS_AS_BackgroundSuspended:     return "EOS_AS_BackgroundSuspended";
+        case EOS_EApplicationStatus::EOS_AS_Foreground:              return "EOS_AS_Foreground";
+        default:                                                     return "Unknown";
+    }
+}
+
 /////////////////////////////////////////////////////////
 // platform
 
@@ -258,6 +317,8 @@ EOS_DECLARE_FUNC(EOS_HPlatform) EOS_Platform_Create(const EOS_Platform_Options* 
 
     auto &inst = EOSSDK_Platform::Inst();
     inst.Init(Options);
+    if (!inst.is_initialized())
+        return nullptr;
     return reinterpret_cast<EOS_HPlatform>(&inst);
 }
 

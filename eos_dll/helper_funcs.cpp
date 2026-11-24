@@ -210,6 +210,9 @@ LOCAL_API std::string get_callback_name(int iCallback)
         I_CALLBACK(EOS_P2P_OnIncomingConnectionRequestInfo);
         I_CALLBACK(EOS_P2P_OnRemoteConnectionClosedInfo);
         I_CALLBACK(EOS_P2P_OnQueryNATTypeCompleteInfo);
+        I_CALLBACK(EOS_P2P_OnPeerConnectionEstablishedInfo);
+        I_CALLBACK(EOS_P2P_OnPeerConnectionInterruptedInfo);
+        I_CALLBACK(EOS_P2P_OnIncomingPacketQueueFullInfo);
         // PlayerDataStorage
         I_CALLBACK(EOS_PlayerDataStorage_QueryFileCallbackInfo);
         I_CALLBACK(EOS_PlayerDataStorage_QueryFileListCallbackInfo);
